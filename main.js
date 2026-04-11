@@ -1,0 +1,202 @@
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { createRequire } from 'module'
+import path from 'path'
+import fs from 'fs'
+import { fileURLToPath } from 'url'
+
+const require = createRequire(import.meta.url)
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const isDev = process.env.NODE_ENV === 'development'
+
+// ── Storage setup ─────────────────────────────────────────────────────────────
+// electron-store for settings (API key etc.)
+const Store = require('electron-store')
+const store = new Store({
+  encryptionKey: 'storyforge-v1', // basic obfuscation for API key
+  defaults: { apiKey: '', projectIndex: {} }
+})
+
+// Project files live in userData/projects/
+const projectsDir = path.join(app.getPath('userData'), 'projects')
+if (!fs.existsSync(projectsDir)) fs.mkdirSync(projectsDir, { recursive: true })
+
+// ── Window ────────────────────────────────────────────────────────────────────
+let mainWindow
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1440,
+    height: 900,
+    minWidth: 900,
+    minHeight: 600,
+    titleBarStyle: 'hiddenInset',  // macOS native feel — traffic lights inside window
+    vibrancy: 'under-window',
+    backgroundColor: '#09090c',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+
+  if (isDev) {
+    mainWindow.loadURL('http://localhost:5173')
+    mainWindow.webContents.openDevTools()
+  } else {
+    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
+  }
+
+  // Open external links in browser, not inside the app
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url)
+    return { action: 'deny' }
+  })
+}
+
+app.whenReady().then(() => {
+  createWindow()
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
+})
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit()
+})
+
+// ── IPC: API Key ──────────────────────────────────────────────────────────────
+ipcMain.handle('get-api-key', () => store.get('apiKey'))
+
+ipcMain.handle('set-api-key', (_, key) => {
+  store.set('apiKey', key.trim())
+  return { ok: true }
+})
+
+// ── IPC: Claude API proxy ─────────────────────────────────────────────────────
+ipcMain.handle('call-claude', async (_, payload) => {
+  const apiKey = store.get('apiKey')
+  if (!apiKey) return { error: 'no_key', message: 'API key not set. Go to Settings to add it.' }
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify(payload),
+    })
+    return response.json()
+  } catch (err) {
+    return { error: 'network', message: err.message }
+  }
+})
+
+// ── IPC: File reading ─────────────────────────────────────────────────────────
+// Opens native macOS file picker and extracts text from all selected files
+ipcMain.handle('read-files', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select Story Documents',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'Story Documents', extensions: ['txt', 'md', 'docx', 'pdf'] },
+      { name: 'Text Files', extensions: ['txt', 'md'] },
+      { name: 'Word Documents', extensions: ['docx'] },
+      { name: 'PDF Files', extensions: ['pdf'] },
+    ],
+  })
+
+  if (canceled || filePaths.length === 0) return []
+
+  const results = []
+
+  for (const filePath of filePaths) {
+    const ext = path.extname(filePath).toLowerCase()
+    const name = path.basename(filePath)
+    const stats = fs.statSync(filePath)
+
+    try {
+      if (ext === '.txt' || ext === '.md') {
+        const content = fs.readFileSync(filePath, 'utf8')
+        results.push({ name, content, size: stats.size, type: ext.slice(1) })
+
+      } else if (ext === '.docx') {
+        const mammoth = require('mammoth')
+        const result = await mammoth.extractRawText({ path: filePath })
+        results.push({ name, content: result.value, size: stats.size, type: 'docx' })
+
+      } else if (ext === '.pdf') {
+        // Stream-based PDF extraction — handles large files without memory spike
+        const pdfParse = require('pdf-parse')
+        const buffer = fs.readFileSync(filePath)
+        const data = await pdfParse(buffer)
+        results.push({
+          name, content: data.text, size: stats.size,
+          type: 'pdf', pages: data.numpages
+        })
+      }
+    } catch (err) {
+      results.push({ name, content: '', size: stats.size, type: ext.slice(1), error: err.message })
+    }
+  }
+
+  return results
+})
+
+// ── IPC: Project persistence ──────────────────────────────────────────────────
+// List all projects (fast — reads index only)
+ipcMain.handle('list-projects', () => {
+  return store.get('projectIndex', {})
+})
+
+// Save a project (index entry + full data file)
+ipcMain.handle('save-project', (_, { id, data }) => {
+  try {
+    // Update index
+    const index = store.get('projectIndex', {})
+    index[id] = {
+      id: data.id,
+      title: data.title,
+      genre: data.genre,
+      status: data.status || 'planning',
+      lastEdited: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+    }
+    store.set('projectIndex', index)
+
+    // Write full project data to its own file
+    const filePath = path.join(projectsDir, `${id}.json`)
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8')
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
+// Load a project's full data
+ipcMain.handle('load-project', (_, id) => {
+  try {
+    const filePath = path.join(projectsDir, `${id}.json`)
+    if (!fs.existsSync(filePath)) return null
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'))
+  } catch {
+    return null
+  }
+})
+
+// Delete a project
+ipcMain.handle('delete-project', (_, id) => {
+  try {
+    const index = store.get('projectIndex', {})
+    delete index[id]
+    store.set('projectIndex', index)
+    const filePath = path.join(projectsDir, `${id}.json`)
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
+// Get userData path (so writer can find their files if needed)
+ipcMain.handle('get-data-path', () => app.getPath('userData'))
