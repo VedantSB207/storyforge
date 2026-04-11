@@ -1,6 +1,21 @@
 {
   "name": "storyforge",
   "version": "0.1.0",
+  "description": "Narrative intelligence engine — Electron + React + Claude AI desktop app for creative writing",
+  "license": "MIT",
+  "author": {
+    "name": "Vedant Bansal",
+    "email": "vedant@bwits.tech",
+    "url": "https://github.com/VedantSB207"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/VedantSB207/storyforge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/VedantSB207/storyforge/issues"
+  },
+  "homepage": "https://github.com/VedantSB207/storyforge#readme",
   "type": "module",
   "main": "electron/main.js",
   "scripts": {
