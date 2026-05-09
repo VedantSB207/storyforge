@@ -1,7 +1,7 @@
 # StoryForge Deep Simulation Engine
 ## Implementation Design Document
 
-**Version 1.3**
+**Version 1.4**
 **Branch:** `deep-simulation-rebuild`
 **Document location in repo:** `docs/SIMULATION_ENGINE_DESIGN.md`
 
@@ -320,6 +320,17 @@ The engine adjusts mortality probabilities, birth rates, message travel times, a
 - Always exploratory — simulation never auto-rewrites the Bible
 - Writer canonises outcomes manually — promote NPCs, adopt plot suggestions, accept or reject deaths
 - Simulation results stored in new project field `deepSimulationHistory` (separate from existing `lastSimulation`)
+
+#### Persistence model — split storage (Phase 3.5)
+
+Each simulation run is split into two artefacts:
+
+- **Metadata stub** lives in the project's `deepSimulationHistory[]` array — small (~1 KB per entry), holds simId, timestamp, cast/round/unit, summary, narrative headline, alive/dead counts, totalCost, censusStats, butterflyStats. Loaded with the project.
+- **Full result file** lives at `<userData>/projects/<projectId>/deep-sims/<simId>.json` — heavy (tens to hundreds of MB at large cast sizes), holds full agent Knowledge layers, full event log, full taxonomy, full narrative. Loaded only when the writer opens that simulation's result panel.
+
+This keeps the project file O(simulation count), not O(simulation volume). Auto-save churn no longer rewrites hundreds of megabytes whenever an unrelated state change fires elsewhere in the app.
+
+Migration: pre-Phase-3.5 projects with bundled `deepSimulationHistory[]` (full data inline) are detected on Deep Simulation tab mount. Inline entries are written to per-sim files; the in-project entries are replaced with metadata stubs; the project is then re-saved. Idempotent and silent.
 
 ---
 
@@ -656,3 +667,9 @@ When this document is updated by future Claude Code sessions, the version number
   - TaxonomyReview "Add Genre" / "Add Kind" buttons fixed (window.prompt is disabled in Electron renderer; replaced with inline text inputs)
 
 **Version 1.3** — Output-as-world-experience North Star added for Phase 5. No code changes; vision capture only. This is the design intent for the output redesign that follows engine completion.
+
+**Version 1.4** — Phase 3.5: Deep Simulation persistence refactor.
+  - Split each run into metadata stub (in project) + full result file (per-sim file)
+  - Added save/load/list/delete IPC handlers (`<userData>/projects/<projectId>/deep-sims/<simId>.json`)
+  - Migration helper auto-converts pre-3.5 inline-history entries on first mount
+  - Eliminates ~80 MB writes on every state change at 1000-cast scale; project file now O(simulation count)

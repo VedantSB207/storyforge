@@ -143,6 +143,51 @@ export const GOSSIP_PROB_ADJACENT    = 0.10
 // characters is also flagged plot-critical for LLM-distortion priority.
 export const PROPAGATABLE_CATEGORIES = ['death', 'need_critical']
 
+// ─── Phase 3.5: persistence model ──────────────────────────────────────────
+// Each simulation run is split into two artefacts:
+//   - METADATA STUB lives in project's deepSimulationHistory[] (small, < 1 KB)
+//   - FULL RESULT lives at <userData>/projects/<projectId>/deep-sims/<simId>.json
+// The project file is therefore O(simulation count) in size, not O(simulation
+// volume). Heavy data only loads when the writer opens that simulation.
+
+export const DEEP_SIM_METADATA_SCHEMA = Object.freeze({
+  simId:             'string (unique sim id, formerly entry.id)',
+  timestamp:         'ISO timestamp',
+  mode:              "'progressive' | 'scenario' (Phase 4)",
+  castSize:          'number (active cast size requested)',
+  roundCount:        'number',
+  timeUnit:          "'hour'|'day'|'week'|'month'|'season'|'year'",
+  seed:              'number (deterministic re-run seed)',
+  summary:           'string (one-line plain-text summary)',
+  narrativeHeadline: 'string | null (pulled out for list display)',
+  alive:             'number',
+  dead:              'number',
+  totalEvents:       'number',
+  totalCost:         'number USD (taxonomy + distortion + narrative)',
+  censusStats:       '{ boundCount, proceduralCount, censusCount, activeCastCount, ... }',
+  butterflyStats:    '{ eventCount, knowledgeCount, edgeCount } | null',
+  llmCallsTotal:     'number | null',
+})
+
+export const DEEP_SIM_FULL_RESULT_SCHEMA = Object.freeze({
+  id:               'string',
+  timestamp:        'ISO timestamp',
+  mode:             'string',
+  castSize:         'number',
+  roundCount:       'number',
+  timeUnit:        'string',
+  seed:             'number',
+  taxonomy:         'TaxonomyShape (full taxonomy used)',
+  censusStats:      'CensusStatsShape',
+  agents:           'Agent[] (full state at end including knownFacts)',
+  events:           'Event[] (full chronological event log)',
+  butterflyStats:   '{ eventCount, knowledgeCount, edgeCount }',
+  butterflyTrace:   'BFT | null (only stored if user has opted in — heavy)',
+  narrative:        'NarrativeShape (Phase 2.5)',
+  llmCallsTotal:    'number',
+  summary:          'string',
+})
+
 // Knowledge entry shape — was placeholder in Phase 1, populated in Phase 3.
 export const KNOWLEDGE_SCHEMA = Object.freeze({
   id:             'string (kn_<n>)',

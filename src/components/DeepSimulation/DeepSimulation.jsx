@@ -7,6 +7,13 @@ import { TaxonomyReview } from './TaxonomyReview.jsx'
 import { generateTaxonomy, fingerprintContent, estimateCostUSD } from './worldTaxonomy.js'
 import { buildCensus } from './CensusManager.js'
 import { generateNarrativeSummary, estimateNarrativeCostUSD } from './narrativeSummary.js'
+import {
+  saveSimResult,
+  loadSimResult,
+  entryToMetadata,
+  entryToFullPayload,
+  migrateInlineHistory,
+} from './persistence.js'
 
 const CAST_SIZES = [50, 200, 500, 1000, 2000]
 const LIVE_LOG_TAIL = 80   // most recent N events shown during running screen
@@ -55,7 +62,41 @@ export function DeepSimulation({
   const [narrative, setNarrative]         = useState(null)
   const [narrativeError, setNarrativeError] = useState('')
 
+  // Phase 3.5 — viewing a past run loaded from disk
+  const [viewLoading, setViewLoading]     = useState(false)
+  const [viewError, setViewError]         = useState('')
+  // Migration runs once per mount when we detect inline-format entries
+  const [migrationRan, setMigrationRan]   = useState(false)
+
   useEffect(() => { pauseRef.current = paused }, [paused])
+
+  // Phase 3.5 — silently migrate any inline (pre-3.5) history entries to
+  // per-sim files on first mount. Idempotent; bails out if there's nothing
+  // to migrate or if Electron API is unavailable.
+  useEffect(() => {
+    if (migrationRan) return
+    if (!project?.id) return
+    const hasInline = (deepSimulationHistory || []).some(
+      e => Array.isArray(e?.agents) && e.agents.length > 0
+    )
+    if (!hasInline) { setMigrationRan(true); return }
+    let cancelled = false
+    ;(async () => {
+      const { history: migrated, migratedCount, errors } = await migrateInlineHistory(project.id, deepSimulationHistory)
+      if (cancelled) return
+      if (migratedCount > 0) {
+        console.log(`[DeepSim] migrated ${migratedCount} inline history entr${migratedCount === 1 ? 'y' : 'ies'} to per-sim files`)
+        setDeepSimulationHistory(migrated)
+      }
+      if (errors.length > 0) {
+        console.warn('[DeepSim] migration partial:', errors)
+      }
+      setMigrationRan(true)
+    })()
+    return () => { cancelled = true }
+    // Only run once per project mount; deps intentionally minimal
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.id])
 
   const boundCount = chars?.length || 0
 
@@ -183,25 +224,42 @@ export function DeepSimulation({
       setNarrativeError(err.message || String(err))
     }
 
-    const entry = {
-      id:         genId(),
+    // Build the run entry. Phase 3.5: split into full (file on disk) +
+    // metadata stub (lives in project's deepSimulationHistory[]).
+    const simId = genId()
+    const fullEntry = {
+      id:         simId,
       timestamp:  new Date().toISOString(),
       mode:       'progressive',
       castSize,
       roundCount,
       timeUnit,
-      seed,                                       // Phase 3: lets the writer re-run the same world
-      taxonomy,                                   // taxonomy snapshot for reproducibility
+      seed,
+      taxonomy,
       censusStats: built.stats,
       agents:     lastSnap.agents,
       events:     lastSnap.events,
-      butterflyStats: lastSnap.butterflyStats,    // Phase 3: trace stats summary (full trace too big for save)
+      butterflyStats: lastSnap.butterflyStats,
       llmCallsTotal: lastSnap.llmCallsTotal,
-      narrative:  narrativeOut,                   // Phase 2.5 — null if generation failed
+      narrative:  narrativeOut,
       summary:    `${summary.alive}/${summary.total} alive, ${summary.dead} died over ${roundCount} ${timeUnit}-round${roundCount === 1 ? '' : 's'}. ${built.stats.boundCount} bound + ${built.stats.activeCastCount - built.stats.boundCount} procedural in cast (${built.stats.censusCount} census).`,
     }
+
+    // Write the heavy full result to its own file (Phase 3.5 main change)
+    if (project?.id) {
+      const writeRes = await saveSimResult(project.id, simId, entryToFullPayload(fullEntry))
+      if (!writeRes?.ok) {
+        console.warn('[DeepSim] save-deep-sim-result failed:', writeRes)
+        // Fall through anyway — at least the in-memory state shows the run
+      } else {
+        console.log(`[DeepSim] wrote ${(writeRes.size / 1024 / 1024).toFixed(2)} MB to deep-sims/${simId}.json`)
+      }
+    }
+
+    // Push only the lightweight stub to project history
+    const metadata = entryToMetadata(fullEntry)
     if (setDeepSimulationHistory) {
-      setDeepSimulationHistory(prev => [entry, ...(prev || [])])
+      setDeepSimulationHistory(prev => [metadata, ...(prev || [])])
     }
 
     setStep('results')
@@ -223,6 +281,46 @@ export function DeepSimulation({
     setCensusStats(null)
     setNarrative(null)
     setNarrativeError('')
+    setViewError('')
+  }
+
+  // Phase 3.5 — load a past simulation's full result from disk and render
+  // it on the results screen. Hydrates the same state vars a fresh run would.
+  const viewPastRun = async (stub) => {
+    if (!project?.id) return
+    setViewError('')
+    setViewLoading(true)
+    try {
+      const res = await loadSimResult(project.id, stub.simId || stub.id)
+      if (!res?.ok) throw new Error(res?.error || 'load failed')
+      const full = res.fullResult
+      // Hydrate state as if the run just completed
+      const summary = {
+        total:    (full.agents || []).length,
+        alive:    (full.agents || []).filter(a => a.alive).length,
+        dead:     (full.agents || []).filter(a => !a.alive).length,
+        avgAge:   (full.agents || []).reduce((s, a) => s + a.age, 0) / Math.max((full.agents || []).length, 1),
+        avgNeeds: ['physiological','safety','belonging','esteem','purpose'].reduce((acc, k) => {
+          const living = (full.agents || []).filter(a => a.alive)
+          acc[k] = living.length === 0 ? 0 : living.reduce((s, a) => s + (a.needs?.[k] ?? 0), 0) / living.length
+          return acc
+        }, {}),
+        counts:   (full.events || []).reduce((m, e) => { m[e.category] = (m[e.category] || 0) + 1; return m }, {}),
+      }
+      fullEventsRef.current = full.events || []
+      setFinalSnapshot({ agents: full.agents || [], events: full.events || [], summary })
+      setCensusStats(full.censusStats || null)
+      setNarrative(full.narrative || null)
+      setNarrativeError('')
+      setRoundCount(full.roundCount || 30)
+      setTimeUnit(full.timeUnit || 'year')
+      setStep('results')
+    } catch (err) {
+      console.error('[DeepSim] viewPastRun failed:', err)
+      setViewError(err.message || String(err))
+    } finally {
+      setViewLoading(false)
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -346,16 +444,36 @@ export function DeepSimulation({
         {(deepSimulationHistory || []).length > 0 && (
           <div style={{ marginTop: 24 }}>
             <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 8 }}>Past Runs</div>
+            {viewError && (
+              <div style={{ marginBottom: 8, padding: '6px 10px', fontSize: 11, color: C.accBright, backgroundColor: C.accBright + '12', border: `1px solid ${C.accBright}44`, borderRadius: 5, fontFamily: 'system-ui' }}>
+                Could not load past run: {viewError}
+              </div>
+            )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {deepSimulationHistory.slice(0, 5).map(h => (
-                <div key={h.id} style={{ padding: '8px 12px', backgroundColor: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 5, fontSize: 11, fontFamily: 'system-ui' }}>
-                  <div style={{ color: C.parch }}>{h.summary}</div>
-                  <div style={{ color: C.muted, fontSize: 10, marginTop: 2 }}>
-                    {new Date(h.timestamp).toLocaleString()} · {h.castSize} cast · {h.roundCount} {h.timeUnit}-rounds
-                    {h.taxonomy?.genres?.length ? ` · ${h.taxonomy.genres.length} genres` : ''}
+              {deepSimulationHistory.slice(0, 5).map(h => {
+                const id = h.simId || h.id
+                return (
+                  <div key={id} style={{ padding: '8px 12px', backgroundColor: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 5, fontSize: 11, fontFamily: 'system-ui', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {h.narrativeHeadline && (
+                        <div style={{ color: C.parch, fontFamily: 'Georgia, serif', fontStyle: 'italic', marginBottom: 3 }}>&ldquo;{h.narrativeHeadline}&rdquo;</div>
+                      )}
+                      <div style={{ color: C.parch }}>{h.summary}</div>
+                      <div style={{ color: C.muted, fontSize: 10, marginTop: 2 }}>
+                        {new Date(h.timestamp).toLocaleString()} · {h.castSize} cast · {h.roundCount} {h.timeUnit}-rounds
+                        {h.totalCost != null && ` · $${h.totalCost.toFixed(4)}`}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => viewPastRun(h)}
+                      disabled={viewLoading}
+                      style={{ padding: '5px 10px', backgroundColor: C.purple + '22', color: C.purpleLight, border: `1px solid ${C.purple}44`, borderRadius: 4, fontSize: 10, cursor: viewLoading ? 'wait' : 'pointer', fontFamily: 'system-ui', flexShrink: 0 }}
+                    >
+                      {viewLoading ? 'Loading…' : 'View'}
+                    </button>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         )}

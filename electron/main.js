@@ -205,6 +205,66 @@ ipcMain.handle('delete-project', (_, id) => {
 // Get userData path (so writer can find their files if needed)
 ipcMain.handle('get-data-path', () => app.getPath('userData'))
 
+// ── IPC: Deep Simulation per-run storage (Phase 3.5) ─────────────────────────
+// Storage location: <userData>/projects/<projectId>/deep-sims/<simId>.json
+// Rationale: nests under the existing per-project subdir (same place library
+// files live). Each simulation result is its own file so the project JSON
+// stays small — heavy data (full agent Knowledge, event log, butterfly trace)
+// only loads when the writer opens that simulation's result panel.
+const getDeepSimDir = (projectId) => {
+  const dir = path.join(projectsDir, projectId, 'deep-sims')
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+ipcMain.handle('save-deep-sim-result', (_, { projectId, simId, fullResult }) => {
+  try {
+    const dir = getDeepSimDir(projectId)
+    const filePath = path.join(dir, `${simId}.json`)
+    fs.writeFileSync(filePath, JSON.stringify(fullResult, null, 2), 'utf8')
+    const stats = fs.statSync(filePath)
+    return { ok: true, path: filePath, size: stats.size }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
+ipcMain.handle('load-deep-sim-result', (_, { projectId, simId }) => {
+  try {
+    const filePath = path.join(projectsDir, projectId, 'deep-sims', `${simId}.json`)
+    if (!fs.existsSync(filePath)) return { ok: false, error: 'not_found' }
+    return { ok: true, fullResult: JSON.parse(fs.readFileSync(filePath, 'utf8')) }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
+ipcMain.handle('list-deep-sim-results', (_, projectId) => {
+  try {
+    const dir = path.join(projectsDir, projectId, 'deep-sims')
+    if (!fs.existsSync(dir)) return { ok: true, files: [] }
+    const files = fs.readdirSync(dir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => {
+        const stats = fs.statSync(path.join(dir, f))
+        return { simId: f.replace(/\.json$/, ''), size: stats.size, mtime: stats.mtime.toISOString() }
+      })
+    return { ok: true, files }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
+ipcMain.handle('delete-deep-sim-result', (_, { projectId, simId }) => {
+  try {
+    const filePath = path.join(projectsDir, projectId, 'deep-sims', `${simId}.json`)
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
 // ── IPC: Project File Library ────────────────────────────────────────────────
 const getLibraryDir = (projectId) => {
   const dir = path.join(projectsDir, projectId, 'library')

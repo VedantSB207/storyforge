@@ -35,6 +35,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   libraryReadFile:   (filePath)                          => ipcRenderer.invoke('library-read-file', filePath),
   saveFileDialog:    (defaultName, dataBase64, filters)  => ipcRenderer.invoke('save-file-dialog', { defaultName, dataBase64, filters }),
 
+  // ── Deep Simulation per-run storage (Phase 3.5) ──────────────────────────
+  saveDeepSimResult:   (projectId, simId, fullResult)    => ipcRenderer.invoke('save-deep-sim-result',   { projectId, simId, fullResult }),
+  loadDeepSimResult:   (projectId, simId)                => ipcRenderer.invoke('load-deep-sim-result',   { projectId, simId }),
+  listDeepSimResults:  (projectId)                       => ipcRenderer.invoke('list-deep-sim-results',  projectId),
+  deleteDeepSimResult: (projectId, simId)                => ipcRenderer.invoke('delete-deep-sim-result', { projectId, simId }),
+
   // Platform flag — lets React know it's running inside Electron
   platform: process.platform,
 })
