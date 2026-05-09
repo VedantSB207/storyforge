@@ -1,7 +1,7 @@
 # StoryForge Deep Simulation Engine
 ## Implementation Design Document
 
-**Version 1.0**
+**Version 1.1**
 **Branch:** `deep-simulation-rebuild`
 **Document location in repo:** `docs/SIMULATION_ENGINE_DESIGN.md`
 
@@ -112,6 +112,13 @@ Each agent is a JavaScript object with eight layers of state. Below is the full 
       conditions: string[]          // ['must_have_mirror', 'must_be_at_altar', 'must_be_awake']
     }
   ],
+
+  // ----- Note on Bible character data shape -----
+  // Story Bible stores `traits` as a comma-separated string and `secrets` as
+  // multi-line free text. The agent state schema treats both as `string[]`.
+  // The AgentFactory normalises at the boundary: `traits` is split on commas,
+  // `secrets` is split on newlines, both trimmed and empty entries filtered.
+  // Future code consuming agent state can rely on the array typing.
 
   // ===== Layer 4: Drives =====
   needs: {                          // 0-1 scalars, fluctuate each round
@@ -358,8 +365,8 @@ src/components/DeepSimulation/
 
 ```
 src/App.jsx                      // add Deep Simulation tab to NAV array; rename existing Simulation to "Quick Scenario"
-electron/main.js                 // add IPC handler for deepSimulationHistory persistence
-src/components/Dashboard.jsx     // no functional change yet, just verify the existing Simulation references update to Quick Scenario references
+electron/main.js                 // no changes needed. The existing save-project IPC handler is a generic data passthrough; it persists any field added to the project data object, including deepSimulationHistory. A separate handler would be redundant.
+src/components/Dashboard.jsx     // no changes needed. Dashboard's setTab('simulation') uses the tab ID, which is unchanged. Only the user-facing label changes from "✦ Simulation" to "✦ Quick Scenario" in the App.jsx NAV array.
 ```
 
 ### NAV array change
@@ -621,3 +628,8 @@ When this document is updated by future Claude Code sessions, the version number
 ### Changelog
 
 **Version 1.0** — Initial document. Architecture and Phase 1 brief detailed. Phases 2–5 briefs are placeholders pending phase activation.
+
+**Version 1.1** — Phase 1 deviations folded back into doc:
+  - IPC handler not needed (existing save-project handles new fields)
+  - char.traits and char.secrets normalised at AgentFactory boundary
+  - Dashboard.jsx unchanged (tab ID stable, only label changed)
