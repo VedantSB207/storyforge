@@ -242,7 +242,7 @@ export default function StoryForge() {
         {tab==='write'     && <WritingPanel project={project} chars={chars} lore={lore} manuscript={manuscript} setManuscript={setManuscript}/>}
         {tab==='mindmap'   && <MindMap projectTitle={project.title} chars={chars} importedEdges={importedEdges}/>}
         {tab==='simulation'&& <SimPanel chars={chars} lore={lore} setSimulationCount={setSimulationCount} setLastSimulation={setLastSimulation}/>}
-        {tab==='deepsim'   && <DeepSimulation project={project} chars={chars} deepSimulationHistory={deepSimulationHistory} setDeepSimulationHistory={setDeepSimulationHistory} setTab={switchTab}/>}
+        {tab==='deepsim'   && <DeepSimulation project={project} chars={chars} lore={lore} timelineChapters={timelineChapters} deepSimulationHistory={deepSimulationHistory} setDeepSimulationHistory={setDeepSimulationHistory} setTab={switchTab}/>}
         {tab==='bible'     && <StoryBible chars={chars} setChars={setChars} lore={lore} setLore={setLore}/>}
         {tab==='relweb'    && <RelationshipWeb chars={chars} relationships={relationships} setRelationships={setRelationships} setRelNodes={setRelNodes} setRelEdges={setRelEdges}/>}
         {tab==='timeline'  && <Timeline project={project} timelineChapters={timelineChapters} setTimelineChapters={setTimelineChapters} contFlags={contFlags} setContFlags={setContFlags}/>}

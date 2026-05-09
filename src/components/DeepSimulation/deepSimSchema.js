@@ -94,3 +94,66 @@ export const AGENT_SCHEMA = Object.freeze({
 // Event categories Phase 1 actually emits. The full nine-category set
 // arrives in Phase 3 per the design doc.
 export const PHASE1_EVENT_CATEGORIES = ['aging', 'need_critical', 'death']
+
+// ─── Phase 2 additions ──────────────────────────────────────────────────────
+
+// Census = total population that exists conceptually. Active cast = subset
+// computed each round. Census size = active cast × this multiplier.
+export const CENSUS_MULTIPLIER = 5
+
+// LLM model and budget for the one-shot taxonomy detection at setup time.
+// Round loop is still 100% deterministic — no LLM calls per round.
+export const TAXONOMY_MODEL = 'claude-sonnet-4-20250514'
+export const TAXONOMY_MAX_TOKENS = 2000
+
+// Allowed values for kind.typicalSize (sorted small→large)
+export const KIND_SIZES = ['tiny', 'small', 'medium', 'large', 'huge']
+
+// Schema for the world taxonomy object the engine generates and the writer
+// reviews. Stored alongside each simulation run in deepSimulationHistory for
+// reproducibility.
+export const TAXONOMY_SCHEMA = Object.freeze({
+  genres: [
+    {
+      id:       'string (e.g. animal_kingdom)',
+      name:     'string (display label)',
+      detected: 'boolean (true=engine, false=writer-added)',
+      weight:   'number 0-1 (prevalence in census)',
+      kinds: [
+        {
+          id:                    'string (e.g. rattlesnake)',
+          name:                  'string (display label)',
+          included:              'boolean (writer can suppress)',
+          typicalTraits:         'string[]',
+          typicalLifeExpectancy: 'number (years)',
+          typicalSize:           'tiny | small | medium | large | huge',
+          typicalCount:          'number (proportional count per 100 active cast)',
+        },
+      ],
+    },
+  ],
+  reasoning:        'string (brief writer-facing explanation)',
+  generatedAt:      'ISO timestamp',
+  contentFingerprint: 'string (hash of chars+lore at generation time)',
+})
+
+// Default empty taxonomy — keeps the UI rendering cleanly before generation
+export const EMPTY_TAXONOMY = {
+  genres: [],
+  reasoning: '',
+  generatedAt: null,
+  contentFingerprint: '',
+}
+
+// Generic value/fear pools for procedural NPCs. Phase 4 will replace with
+// LLM enrichment for the active cast. Phase 2 just needs them to exist.
+export const GENERIC_VALUES = [
+  'survival', 'family', 'territory', 'reputation', 'freedom',
+  'tradition', 'novelty', 'truth', 'loyalty', 'pleasure',
+  'power', 'community', 'solitude', 'craft', 'faith',
+]
+
+export const GENERIC_FEARS = [
+  'death', 'loss', 'isolation', 'failure', 'exposure',
+  'capture', 'betrayal', 'starvation', 'pain', 'irrelevance',
+]
