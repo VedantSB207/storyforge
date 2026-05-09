@@ -1,16 +1,17 @@
-// Phase 3 — SimulationRunner
-// Drives the round loop. Pure JS up through Phase 2; Phase 3 adds an
-// async propagation step that may make capped LLM calls.
+// Phase 4a — SimulationRunner with decisions, actions, bonds
 //
-// Round phases (Phase 3):
+// Round phases (Phase 4a):
 //   1. Aging
 //   2. Needs depletion
-//   3. Mortality check
-//   ── deterministic events fired ──
-//   4. Witness computation + Knowledge updates (firsthand)
-//   5. Gossip cascade with distortion (trait or LLM, capped)
+//   3. Decide actions  (Phase 4a — Tier 0 / 1 / 2 routing)
+//   4. Resolve actions (Phase 4a — apply effects, generate events)
+//   5. Mortality check
+//   6. Compute witnesses for ALL events including action events
+//   7. Propagate information (with bond-aware confidence)
+//   8. Update bonds from action events
+//   9. Decay bonds for inactive relationships
 //
-// All RNG calls go through the seeded `rng` parameter. Same seed → same run.
+// All RNG goes through the seeded `rng` parameter for end-to-end determinism.
 
 import {
   applyAging,
@@ -22,9 +23,15 @@ import { initialisePositions } from './positionGraph.js'
 import { tagExceptionalPerception } from './witnessRules.js'
 import { createTrace, traceStats } from './butterflyTrace.js'
 import { propagateRound, resetKidCounter } from './propagation.js'
+import { decideAction } from './decisionLogic.js'
+import { resolveAction } from './actions.js'
+import { initOllama } from './ollamaClient.js'
+import { applyCoWitnessBonus, updateBondFromEvent, decayBonds } from './bondsLayer.js'
 import {
   MAX_LLM_DISTORTION_CALLS_PER_ROUND,
   MAX_LLM_DISTORTION_CALLS_PER_SIM,
+  OLLAMA_DEFAULT_URL,
+  OLLAMA_DEFAULT_MODEL,
 } from './deepSimSchema.js'
 
 // Mulberry32 — small, fast, seeded PRNG. Same seed → same sequence.
@@ -39,61 +46,125 @@ export function makeSeededRng(seed) {
   }
 }
 
-// Async generator so the UI can stream snapshots.
 export async function* runSimulationRounds({
   initialAgents,
   roundCount,
   timeUnit,
   rng = Math.random,
   yieldEvery = 1,
-  // ── Phase 3 additions ──
   lore = [],
   chars = [],
   seed = null,
+  // Phase 3 LLM distortion caps
   maxLLMPerRound = MAX_LLM_DISTORTION_CALLS_PER_ROUND,
   maxLLMPerSim   = MAX_LLM_DISTORTION_CALLS_PER_SIM,
+  // Phase 4a Ollama config (optional — caller can override URL/model)
+  ollamaUrl   = OLLAMA_DEFAULT_URL,
+  ollamaModel = OLLAMA_DEFAULT_MODEL,
+  // Test-only: disable all LLM (Tier 2 decisions + Phase 3 distortion).
+  // With same seed, two runs will be byte-identical when this is on.
+  disableLLM = false,
 }) {
-  // Use seeded rng for deterministic behaviour if seed provided
   const effectiveRng = seed != null ? makeSeededRng(seed) : rng
-  let agents = initialAgents.map(a => ({ ...a, knownFacts: [] }))
+  let agents = initialAgents.map(a => ({
+    ...a,
+    knownFacts:    [],
+    bonds:         {},
+    actionHistory: [],
+  }))
 
-  // Init positions and exceptional perception flags ONCE
+  // Init positions, exceptional perception, Ollama health (all once).
   const positionState = initialisePositions(agents, lore, chars, effectiveRng)
   tagExceptionalPerception(agents)
+  const ollamaState = disableLLM
+    ? { available: false, model: 'disabled', url: 'disabled', reason: 'disableLLM_flag' }
+    : await initOllama({ url: ollamaUrl, model: ollamaModel })
 
-  // Build agent index for O(1) lookup during propagation
+  // Build agent index for O(1) lookup
   const agentById = Object.create(null)
   for (const a of agents) agentById[a.id] = a
 
-  // Butterfly trace + LLM call counter
+  // Butterfly trace + counters
   resetKidCounter()
   const butterflyTrace = createTrace()
-  let llmCallsTotal    = 0
-  const llmUsageAll    = []
+  let llmDistortionCallsTotal = 0
+  const llmDistortionUsageAll = []
+
+  // Phase 4a tier counters. When disableLLM is set we pre-saturate the caps
+  // so every decision routes to Tier 0 deterministic.
+  const tierCounters = {
+    tier0Total: 0,
+    tier1Total: 0,
+    tier2Total: disableLLM ? 999999 : 0,
+    tier1ThisRound: 0,
+    tier2Usage: [],
+    tier2Errors: [],
+  }
+  const actionCounts = Object.create(null)
 
   let allEvents = []
 
   for (let round = 1; round <= roundCount; round++) {
     const ctx = { round, timeUnit }
     const roundEvents = []
-    const next = []
 
-    // ── Deterministic state evolution ────────────────────────────────────
+    tierCounters.tier1ThisRound = 0   // reset per-round Ollama cap
+
+    // ── 1-2. Deterministic aging + needs depletion ──────────────────────
+    const next = []
+    const deterministicEventsByAgent = new Map()
     for (const a of agents) {
       const before = a
       const aged    = applyAging(before, ctx)
       const need    = depleteNeeds(aged.agent, ctx)
-      const death   = mortalityCheck(need.agent, ctx, effectiveRng)
-      const milestone = maybeLogAgingMilestone(before, death.agent, ctx)
-      next.push(death.agent)
-      roundEvents.push(...aged.events, ...need.events, ...death.events, ...milestone)
+      const milestone = maybeLogAgingMilestone(before, need.agent, ctx)
+      const evs = [...aged.events, ...need.events, ...milestone]
+      next.push(need.agent)
+      if (evs.length) deterministicEventsByAgent.set(need.agent.id, evs)
     }
-
     agents = next
-    // Re-index after mutation (we overwrote the agent objects above with copies)
     for (const a of agents) agentById[a.id] = a
 
-    // ── Information propagation (Phase 3) ────────────────────────────────
+    // World object passed to action / decision logic
+    const world = { round, agents, agentById, positionState }
+
+    // ── 3-4. Decide + resolve actions for living agents ────────────────
+    const actionEvents = []
+    for (const agent of agents) {
+      if (!agent.alive) continue
+      const decision = await decideAction({
+        agent, world, rng: effectiveRng, ollamaState,
+        callCounters: tierCounters,
+      })
+      tierCounters[decision.tier + 'Total'] = (tierCounters[decision.tier + 'Total'] || 0) + 1
+      actionCounts[decision.action] = (actionCounts[decision.action] || 0) + 1
+
+      const result = resolveAction(agent, decision.action, world, effectiveRng)
+      if (result?.events?.length) {
+        for (const e of result.events) {
+          e.agentGenreTag = agent.genreTag
+          actionEvents.push(e)
+        }
+      }
+      // Stash bond updates on a side-channel; they apply after propagation
+      if (result?.bondUpdates) {
+        agent._pendingBondUpdates = (agent._pendingBondUpdates || []).concat(result.bondUpdates)
+      }
+    }
+
+    // ── 5. Mortality check ─────────────────────────────────────────────
+    const deathEvents = []
+    for (const agent of agents) {
+      const m = mortalityCheck(agent, ctx, effectiveRng)
+      Object.assign(agent, m.agent)
+      if (m.events?.length) deathEvents.push(...m.events)
+    }
+
+    // Combine all this round's events: deterministic + actions + deaths
+    for (const evs of deterministicEventsByAgent.values()) roundEvents.push(...evs)
+    roundEvents.push(...actionEvents, ...deathEvents)
+
+    // ── 6-7. Witnesses + propagation (Phase 3) ─────────────────────────
     const propResult = await propagateRound({
       roundEvents,
       agents,
@@ -101,13 +172,39 @@ export async function* runSimulationRounds({
       positionState,
       butterflyTrace,
       rng: effectiveRng,
-      llmCallsTotalSoFar: llmCallsTotal,
-      maxLLMPerRound,
-      maxLLMPerSim,
+      llmCallsTotalSoFar: llmDistortionCallsTotal,
+      // Force trait-only distortion when LLM disabled
+      maxLLMPerRound: disableLLM ? 0 : maxLLMPerRound,
+      maxLLMPerSim:   disableLLM ? 0 : maxLLMPerSim,
       agentById,
     })
-    llmCallsTotal = propResult.llmCallsTotal
-    if (propResult.llmUsage?.length) llmUsageAll.push(...propResult.llmUsage)
+    llmDistortionCallsTotal = propResult.llmCallsTotal
+    if (propResult.llmUsage?.length) llmDistortionUsageAll.push(...propResult.llmUsage)
+
+    // ── 8. Update bonds from action events ──────────────────────────────
+    for (const ev of actionEvents) {
+      const a = agentById[ev.agentId]
+      if (!a) continue
+      updateBondFromEvent(a, ev, world)
+    }
+    // Co-witness bonus: pairs that witnessed the same event together.
+    // Use the witnessesByEvent index returned by propagateRound — O(1) lookup
+    // per event instead of an O(K) scan over the cumulative Knowledge store.
+    if (propResult.witnessesByEvent) {
+      for (const witnesses of propResult.witnessesByEvent.values()) {
+        const ws = witnesses.slice(0, 12)
+        for (let i = 0; i < ws.length; i++) {
+          for (let j = i + 1; j < ws.length; j++) {
+            applyCoWitnessBonus(ws[i], ws[j], round)
+          }
+        }
+      }
+    }
+
+    // ── 9. Bond decay ───────────────────────────────────────────────────
+    if (round % 2 === 0) {   // every other round to save cycles
+      for (const a of agents) decayBonds(a, round)
+    }
 
     allEvents = allEvents.concat(roundEvents)
 
@@ -120,14 +217,17 @@ export async function* runSimulationRounds({
         agents,
         positionState,
         butterflyTrace,
-        llmCallsTotal,
+        llmCallsTotal: llmDistortionCallsTotal,
         llmCallsThisRound: propResult.llmCallsThisRound,
+        tierCounters: { ...tierCounters },
+        actionCounts: { ...actionCounts },
+        ollamaState,
         progress: round / roundCount,
       }
     }
   }
 
-  // Final yield carries the trace stats so callers can persist them
+  // Final yield with full diagnostics
   yield {
     round: roundCount,
     roundCount,
@@ -137,8 +237,11 @@ export async function* runSimulationRounds({
     positionState,
     butterflyTrace,
     butterflyStats: traceStats(butterflyTrace),
-    llmCallsTotal,
-    llmUsageAll,
+    llmCallsTotal: llmDistortionCallsTotal,
+    llmUsageAll: llmDistortionUsageAll,
+    tierCounters: { ...tierCounters },
+    actionCounts: { ...actionCounts },
+    ollamaState,
     progress: 1,
     final: true,
   }

@@ -41,6 +41,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listDeepSimResults:  (projectId)                       => ipcRenderer.invoke('list-deep-sim-results',  projectId),
   deleteDeepSimResult: (projectId, simId)                => ipcRenderer.invoke('delete-deep-sim-result', { projectId, simId }),
 
+  // ── Ollama (Phase 4a) ────────────────────────────────────────────────────
+  queryOllama:        (params)                           => ipcRenderer.invoke('query-ollama', params),
+
   // Platform flag — lets React know it's running inside Electron
   platform: process.platform,
 })

@@ -138,10 +138,13 @@ export const GOSSIP_PROB_BONDED      = 0.8   // intensity * trust applied on top
 export const GOSSIP_PROB_SAME_REGION = 0.25
 export const GOSSIP_PROB_ADJACENT    = 0.10
 
-// Which event categories propagate? Aging is private (a personal milestone),
-// so we only propagate deaths and need-critical events. Death of bound
-// characters is also flagged plot-critical for LLM-distortion priority.
-export const PROPAGATABLE_CATEGORIES = ['death', 'need_critical']
+// Which event categories propagate? Aging and mundane personal actions
+// (eat, rest, observe) are private milestones — they don't gossip. Action
+// events introduced in Phase 4a (betrayal, conflict, cooperation, travel)
+// propagate alongside deaths and need-critical events.
+export const PROPAGATABLE_CATEGORIES = [
+  'death', 'need_critical', 'betrayal', 'conflict', 'cooperation', 'birth', 'travel',
+]
 
 // ─── Phase 3.5: persistence model ──────────────────────────────────────────
 // Each simulation run is split into two artefacts:
@@ -186,6 +189,50 @@ export const DEEP_SIM_FULL_RESULT_SCHEMA = Object.freeze({
   narrative:        'NarrativeShape (Phase 2.5)',
   llmCallsTotal:    'number',
   summary:          'string',
+})
+
+// ─── Phase 4a additions: decisions, actions, Ollama, bonds ─────────────────
+
+// Three-tier decision routing caps.
+export const MAX_TIER1_PER_ROUND = 50    // Ollama calls per round
+export const MAX_TIER2_PER_SIM   = 80    // Claude decision calls per full sim
+
+// Ollama defaults. URL is the local default; production deploys may point
+// at the user's VPS.
+export const OLLAMA_DEFAULT_URL    = 'http://localhost:11434'
+export const OLLAMA_DEFAULT_MODEL  = 'qwen2.5:7b'
+export const OLLAMA_TIMEOUT_MS         = 10000
+export const OLLAMA_HEALTH_TIMEOUT_MS  = 5000
+
+// Bonds — passive decay applies after this many rounds without interaction.
+export const BOND_DECAY_THRESHOLD_ROUNDS = 5
+
+// Bond-aware gossip: a high-intensity bond between transmitter and receiver
+// preserves more confidence than the default per-hop decay.
+export const BONDED_GOSSIP_INTENSITY_THRESHOLD = 0.5
+export const BONDED_GOSSIP_DECAY = 0.85
+
+export const ACTION_SCHEMA = Object.freeze({
+  name:          'string (uppercase id)',
+  eventCategory: "'eat' | 'rest' | 'travel' | 'cooperation' | 'conflict' | 'betrayal' | 'observe'",
+  preconditions: 'function(agent, world) → boolean',
+  resolve:       'function(agent, target, world, rng) → { success, target?, events, bondUpdates? }',
+})
+
+export const DECISION_SCHEMA = Object.freeze({
+  action:    'string (action name)',
+  tier:      "'tier0' | 'tier1' | 'tier2'",
+  reasoning: 'string',
+  usage:     '{ input_tokens, output_tokens } | null',
+})
+
+export const BOND_SCHEMA = Object.freeze({
+  otherId:          'string (agent id)',
+  type:             "'weak' | 'friendship' | 'love' | 'kinship' | 'rivalry' | 'enmity'",
+  intensity:        'number 0-1',
+  trust:            'number -1 to 1',
+  history:          '[{ round, eventType, dIntensity, dTrust }] (last 30)',
+  lastUpdatedRound: 'number',
 })
 
 // Knowledge entry shape — was placeholder in Phase 1, populated in Phase 3.

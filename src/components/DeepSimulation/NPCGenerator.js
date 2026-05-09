@@ -86,8 +86,9 @@ export function createProceduralAgent({ genreId, kindTemplate, rng = Math.random
     goals: [],
     longTermAspiration: '',
 
-    // Layer 5 — Bonds (empty Phase 2)
+    // Layer 5 — Bonds (Phase 4a populates bonds map at runtime)
     relationships: {},
+    bonds:         {},
     factions:      [],
 
     // Layer 6 — Knowledge (empty Phase 2)
@@ -110,6 +111,9 @@ export function createProceduralAgent({ genreId, kindTemplate, rng = Math.random
     // Lifecycle
     alive: true,
     _firedNeedCritical: {},
+
+    // Phase 4a — action history
+    actionHistory: [],
   }
 }
 

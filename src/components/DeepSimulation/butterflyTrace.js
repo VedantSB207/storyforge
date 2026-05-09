@@ -26,13 +26,19 @@ export function createTrace() {
     // (1000 cast can produce 200k+ edges).
     _outByFrom: Object.create(null),   // fromId  → [edge, edge, ...]
     _inByTo:    Object.create(null),   // toId    → edge (single parent)
+    // Deterministic counter for synthesised event IDs — replaces Math.random
+    // so two runs with the same seed produce byte-identical IDs.
+    _eventIdCounter: 0,
   }
 }
 
 // Record an origin event in the trace. Returns the event id (mutates event
 // to add an id if it lacks one).
 export function recordOriginEvent(event, trace) {
-  if (!event.id) event.id = `ev_${event.round || 0}_${Math.random().toString(36).slice(2, 8)}`
+  if (!event.id) {
+    trace._eventIdCounter = (trace._eventIdCounter || 0) + 1
+    event.id = `ev_${event.round || 0}_${trace._eventIdCounter.toString(36)}`
+  }
   trace.events[event.id] = {
     id:        event.id,
     round:     event.round,

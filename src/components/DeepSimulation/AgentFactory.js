@@ -59,8 +59,10 @@ export function createAgentFromBibleCharacter(char) {
     goals: [],
     longTermAspiration: '',
 
-    // Layer 5 — Bonds (empty Phase 1)
+    // Layer 5 — Bonds (Phase 4a populates bonds map; relationships kept
+    // for back-compat with any external consumer)
     relationships: {},
+    bonds:         {},
     factions:      [],
 
     // Layer 6 — Knowledge (empty Phase 1)
@@ -90,6 +92,10 @@ export function createAgentFromBibleCharacter(char) {
     // Internal flag set: lets us avoid re-firing the same need_critical event
     // every round once a need is already below threshold
     _firedNeedCritical: {},
+
+    // Phase 4a — what this agent has done over the simulation (capped to
+    // last 60 entries by the action resolver)
+    actionHistory: [],
   }
 }
 

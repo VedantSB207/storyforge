@@ -205,6 +205,46 @@ ipcMain.handle('delete-project', (_, id) => {
 // Get userData path (so writer can find their files if needed)
 ipcMain.handle('get-data-path', () => app.getPath('userData'))
 
+// ── IPC: Ollama (Phase 4a) ───────────────────────────────────────────────────
+// HTTP wrapper around an Ollama server (local or VPS). The renderer never
+// touches the URL directly — keeps CORS clean and lets the URL be configured
+// server-side. Health-check mode pings /api/tags; decision mode posts to
+// /api/generate with stream:false and short JSON response.
+//
+// Never throws. Returns { ok, response?, error? } envelope.
+ipcMain.handle('query-ollama', async (_, { url, model, prompt, healthCheck, timeout }) => {
+  const controller = new AbortController()
+  const tid = setTimeout(() => controller.abort(), timeout || 10000)
+  try {
+    if (healthCheck) {
+      const res = await fetch(`${url}/api/tags`, { signal: controller.signal })
+      clearTimeout(tid)
+      if (!res.ok) return { ok: false, error: `health_check_${res.status}` }
+      return { ok: true }
+    }
+    const res = await fetch(`${url}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        format: 'json',
+        options: { temperature: 0.7, num_predict: 120 },
+      }),
+      signal: controller.signal,
+    })
+    clearTimeout(tid)
+    if (!res.ok) return { ok: false, error: `http_${res.status}` }
+    const data = await res.json()
+    return { ok: true, response: data?.response || '' }
+  } catch (err) {
+    clearTimeout(tid)
+    if (err.name === 'AbortError') return { ok: false, error: 'timeout' }
+    return { ok: false, error: err.message || 'unknown' }
+  }
+})
+
 // ── IPC: Deep Simulation per-run storage (Phase 3.5) ─────────────────────────
 // Storage location: <userData>/projects/<projectId>/deep-sims/<simId>.json
 // Rationale: nests under the existing per-project subdir (same place library

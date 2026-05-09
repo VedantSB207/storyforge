@@ -33,6 +33,8 @@ import {
   GOSSIP_PROB_SAME_REGION,
   GOSSIP_PROB_ADJACENT,
   PROPAGATABLE_CATEGORIES,
+  BONDED_GOSSIP_INTENSITY_THRESHOLD,
+  BONDED_GOSSIP_DECAY,
 } from './deepSimSchema.js'
 
 // Allocate a stable id for a Knowledge entry.
@@ -104,6 +106,10 @@ export async function propagateRound({
   let llmThisRound = 0
   const llmUsage = []
   let llmCallsTotal = llmCallsTotalSoFar
+  // Phase 4a fix: index witness agents per event so the runner's co-witness
+  // bonus loop can do O(1) lookup instead of scanning the full Knowledge
+  // store. Without this, 1000-cast runs went from minutes to over an hour.
+  const witnessesByEvent = new Map()
 
   for (const event of roundEvents) {
     // Skip events we don't propagate (aging is private)
@@ -148,6 +154,7 @@ export async function propagateRound({
     // ── Witness step ──────────────────────────────────────────────────
     const witnesses = computeWitnesses(event, agents, positionState, rng)
     const hopQueue = []   // entries ready to gossip onward
+    const eventWitnessAgents = []
     for (const w of witnesses) {
       if (!w.alive && w.id !== origin.id) continue   // dead don't witness anything new
       const kid = newKid()
@@ -169,15 +176,18 @@ export async function propagateRound({
         transmitter: null, receiver: w.id, round, distortionMode: 'witness', confidenceLost: 0,
       }, butterflyTrace)
       hopQueue.push({ holder: w, entry, parentId: eventId })
+      eventWitnessAgents.push(w)
     }
+    if (eventWitnessAgents.length > 0) witnessesByEvent.set(eventId, eventWitnessAgents)
 
     // ── Gossip cascade ───────────────────────────────────────────────
     while (hopQueue.length) {
       const { holder, entry, parentId } = hopQueue.shift()
       const nextHop = entry.hops + 1
       if (nextHop > PROPAGATION_HOP_LIMIT) continue
-      const newConfidence = entry.confidence * CONFIDENCE_DECAY_PER_HOP
-      if (newConfidence < CONFIDENCE_FLOOR) continue
+      // Default decay; bonded-pair multiplier applied per-receiver below
+      const baseConfidence = entry.confidence * CONFIDENCE_DECAY_PER_HOP
+      if (baseConfidence < CONFIDENCE_FLOOR) continue
 
       // Gossip candidates: bonded + same-region + adjacent (excluding self)
       const candidates = adjacentAgents(holder, agents, positionState)
@@ -187,6 +197,16 @@ export async function propagateRound({
       const targets = chooseGossipTargets(holder, candidates, agents, positionState, rng)
 
       for (const target of targets) {
+        // Phase 4a — bond-aware confidence: a high-intensity bond between
+        // transmitter and receiver preserves more of the parent confidence
+        // than the default decay (information passes more truly between
+        // close confidants).
+        const bond = holder.bonds?.[target.id]
+        const decay = (bond && bond.intensity > BONDED_GOSSIP_INTENSITY_THRESHOLD)
+          ? BONDED_GOSSIP_DECAY
+          : CONFIDENCE_DECAY_PER_HOP
+        const newConfidence = entry.confidence * decay
+        if (newConfidence < CONFIDENCE_FLOOR) continue
         // Distort
         let distorted
         if (shouldUseLLM(event, holder, target, nextHop, llmThisRound, llmCallsTotal, maxLLMPerRound, maxLLMPerSim)) {
@@ -231,5 +251,5 @@ export async function propagateRound({
     }
   }
 
-  return { llmCallsThisRound: llmThisRound, llmCallsTotal, llmUsage }
+  return { llmCallsThisRound: llmThisRound, llmCallsTotal, llmUsage, witnessesByEvent }
 }

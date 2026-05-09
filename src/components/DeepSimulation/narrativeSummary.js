@@ -12,9 +12,11 @@ Read the events as story material, not status updates. Name characters who appea
 
 Different characters witnessed different things or heard distorted versions. Use this in your chronicle — when you mention a major event, sometimes name who saw it firsthand and who heard rumours of it. The asymmetry is part of the story; what someone *thinks* happened is often more revealing than what actually happened. Honor those perspective gaps when they appear in the source material.
 
+Agents took actions during this simulation — they ate, rested, traveled, formed bonds, fought, betrayed, allied. Some characters formed deep relationships; some broke them. Use these dynamics in your chronicle. When a bound character had significant interactions, name the other party. When betrayals or alliances happened among bound characters, lean into them — those are the dramatic spine of what unfolded.
+
 Be honest if the simulation was uneventful. If little happened, lean into the existential quiet — say so as story rather than padding. A short, true chronicle is better than a long, padded one.
 
-Do NOT use technical terms. No 'agent', 'round', 'tier', 'NPC', 'simulation', 'cast', 'census', 'mortality', 'depletion', 'state', 'propagation', 'hop'. Use story language: characters live, age, hunger, fear, die. Time passes. Seasons turn. Word travels — accurately, or not.
+Do NOT use technical terms. No 'agent', 'round', 'tier', 'NPC', 'simulation', 'cast', 'census', 'mortality', 'depletion', 'state', 'propagation', 'hop', 'bond intensity'. Use story language: characters live, age, hunger, fear, die. Time passes. Seasons turn. Word travels — accurately, or not. Friendships form. Trust breaks.
 
 Return ONLY a JSON object, no preamble or trailing text:
 
@@ -88,6 +90,68 @@ ${censusStats ? `- Active cast: ${censusStats.activeCastCount} (${censusStats.bo
   if (butterflyStats) {
     parts.push(`# Information graph
 ${butterflyStats.eventCount} origin events propagated through ${butterflyStats.knowledgeCount} pieces of knowledge across ${butterflyStats.edgeCount} hops.`)
+  }
+
+  // Phase 4a — top dramatic events + bond summaries for bound chars
+  const SIGNIFICANCE_WEIGHT = {
+    betrayal:      10,
+    death:          8,
+    conflict:       6,
+    cooperation:    3,
+    travel:         2,
+    need_critical:  2,
+    eat:            0,
+    rest:           0,
+    observe:        0,
+    aging:          0,
+  }
+  const topSignificant = (events || [])
+    .map(e => ({ e, w: SIGNIFICANCE_WEIGHT[e.category] ?? 1 }))
+    .filter(x => x.w > 0)
+    .sort((a, b) => b.w - a.w)
+    .slice(0, 8)
+  if (topSignificant.length > 0) {
+    parts.push('# Top significant events (use these as your dramatic spine)')
+    parts.push(topSignificant.map(({ e }) => `- round ${e.round}: ${e.content}`).join('\n'))
+  }
+
+  // Bond summary for bound chars — who bonded with whom and how
+  const boundBondLines = []
+  for (const a of (agents || []).filter(a => a?.source === 'bound')) {
+    const top = Object.values(a.bonds || {}).sort((x, y) => y.intensity - x.intensity).slice(0, 3)
+    if (top.length === 0) continue
+    const lines = top.map(b => {
+      const o = (agents || []).find(x => x.id === b.otherId)
+      const name = o?.name || b.otherId
+      return `    - ${name}: ${b.type} (intensity ${(b.intensity ?? 0).toFixed(2)}, trust ${(b.trust ?? 0).toFixed(2)})`
+    }).join('\n')
+    boundBondLines.push(`  ${a.name} formed bonds with:\n${lines}`)
+  }
+  if (boundBondLines.length > 0) {
+    parts.push('# Bonds among bound characters at end of simulation')
+    parts.push(boundBondLines.join('\n\n'))
+  }
+
+  // Action chains: cooperation/conflict/betrayal pairs in close rounds
+  const dramaticActions = (events || []).filter(e =>
+    e.category === 'betrayal' || e.category === 'conflict' || e.category === 'cooperation'
+  )
+  if (dramaticActions.length > 0) {
+    const chains = []
+    for (const e of dramaticActions.slice(0, 30)) {
+      // Did the target do something significant within 3 rounds after?
+      const followups = dramaticActions.filter(f =>
+        f.agentId === e.targetId && f.round > e.round && f.round <= e.round + 3
+      ).slice(0, 1)
+      if (followups.length > 0) {
+        chains.push(`- round ${e.round}: ${e.content} → round ${followups[0].round}: ${followups[0].content}`)
+      }
+      if (chains.length >= 3) break
+    }
+    if (chains.length > 0) {
+      parts.push('# Top dramatic action chains (causation, A → B)')
+      parts.push(chains.join('\n'))
+    }
   }
 
   return parts.join('\n\n')
