@@ -13,6 +13,7 @@ import { Capture } from "./components/Capture.jsx";
 import { LibraryPanel } from "./components/LibraryPanel.jsx";
 import { ImportAnalyse } from "./components/ImportAnalyse.jsx";
 import { AIAssistant } from "./components/AIAssistant.jsx";
+import { DeepSimulation } from "./components/DeepSimulation/DeepSimulation.jsx";
 
 /* ── API KEY SETUP SCREEN ── */
 function ApiKeySetup({ onSave }) {
@@ -79,6 +80,7 @@ export default function StoryForge() {
   const [simulationCount, setSimulationCount] = useState(0);
   const [lastSimulation, setLastSimulation] = useState(null);
   const [selectedArc, setSelectedArc] = useState('discover');
+  const [deepSimulationHistory, setDeepSimulationHistory] = useState([]);
 
   // ── Tab switch handler (persists lastTab)
   const switchTab = (tabId) => {
@@ -104,8 +106,9 @@ export default function StoryForge() {
       lastTab: tab,
       selectedArc, simulationCount, lastSimulation,
       timelineChapters, contFlags,
+      deepSimulationHistory,
     });
-  }, [project, chars, lore, relationships, manuscript, tab, selectedArc, simulationCount, lastSimulation, timelineChapters, contFlags]);
+  }, [project, chars, lore, relationships, manuscript, tab, selectedArc, simulationCount, lastSimulation, timelineChapters, contFlags, deepSimulationHistory]);
 
   // ── Open project: load its saved data
   const openProject = async (p) => {
@@ -122,6 +125,7 @@ export default function StoryForge() {
         setLastSimulation(data.lastSimulation || null);
         setTimelineChapters(data.timelineChapters || []);
         setContFlags(data.contFlags || []);
+        setDeepSimulationHistory(data.deepSimulationHistory || []);
       }
     }
     setProject(p);
@@ -150,7 +154,8 @@ export default function StoryForge() {
     {id:'dashboard',  label:'Dashboard'},
     {id:'write',      label:'Write'},
     {id:'mindmap',    label:'Mindmap'},
-    {id:'simulation', label:'\u2726 Simulation', hi:true},
+    {id:'simulation', label:'\u2726 Quick Scenario', hi:true},
+    {id:'deepsim',    label:'\u2726 Deep Simulation', hi:true},
     {id:'bible',      label:'Story Bible'},
     {id:'relweb',     label:'Relationship Web'},
     {id:'timeline',   label:'Timeline'},
@@ -237,6 +242,7 @@ export default function StoryForge() {
         {tab==='write'     && <WritingPanel project={project} chars={chars} lore={lore} manuscript={manuscript} setManuscript={setManuscript}/>}
         {tab==='mindmap'   && <MindMap projectTitle={project.title} chars={chars} importedEdges={importedEdges}/>}
         {tab==='simulation'&& <SimPanel chars={chars} lore={lore} setSimulationCount={setSimulationCount} setLastSimulation={setLastSimulation}/>}
+        {tab==='deepsim'   && <DeepSimulation project={project} chars={chars} deepSimulationHistory={deepSimulationHistory} setDeepSimulationHistory={setDeepSimulationHistory} setTab={switchTab}/>}
         {tab==='bible'     && <StoryBible chars={chars} setChars={setChars} lore={lore} setLore={setLore}/>}
         {tab==='relweb'    && <RelationshipWeb chars={chars} relationships={relationships} setRelationships={setRelationships} setRelNodes={setRelNodes} setRelEdges={setRelEdges}/>}
         {tab==='timeline'  && <Timeline project={project} timelineChapters={timelineChapters} setTimelineChapters={setTimelineChapters} contFlags={contFlags} setContFlags={setContFlags}/>}

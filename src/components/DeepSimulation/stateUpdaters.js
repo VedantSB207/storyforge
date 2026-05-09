@@ -1,0 +1,115 @@
+// Phase 1 — pure state updaters
+// Each updater takes (agent, ctx) and returns { agent, events }.
+// Events are appended to the simulation log by the runner.
+// No external state. No LLM calls. No randomness outside mortality.
+
+import {
+  TIME_UNIT_YEARS,
+  NEEDS_KEYS,
+  NEEDS_BASELINE_PER_DAY,
+  NEED_CRITICAL_THRESHOLD,
+} from './deepSimSchema.js'
+
+// ── Aging ────────────────────────────────────────────────────────────────────
+// Each round advances the agent's age by the time-unit-in-years. Long-running
+// short-unit simulations (e.g. 60 hour-rounds) won't move age perceptibly,
+// which is the intended behaviour per the design doc.
+export function applyAging(agent, ctx) {
+  if (!agent.alive) return { agent, events: [] }
+  const inc = TIME_UNIT_YEARS[ctx.timeUnit] ?? 0
+  const newAge = agent.age + inc
+  return {
+    agent: { ...agent, age: newAge },
+    events: [], // aging itself doesn't always log; long-unit sims emit on year boundaries below
+  }
+}
+
+// ── Needs depletion ──────────────────────────────────────────────────────────
+// Each need decays at a per-day baseline scaled by the time unit. When a need
+// crosses the critical threshold for the first time in this run, emit one
+// need_critical event for that need.
+export function depleteNeeds(agent, ctx) {
+  if (!agent.alive) return { agent, events: [] }
+  const daysPerRound = (TIME_UNIT_YEARS[ctx.timeUnit] ?? 0) * 365
+  const newNeeds = { ...agent.needs }
+  const fired = { ...agent._firedNeedCritical }
+  const events = []
+
+  for (const k of NEEDS_KEYS) {
+    const before = newNeeds[k]
+    const next = Math.max(0, before - NEEDS_BASELINE_PER_DAY[k] * daysPerRound)
+    newNeeds[k] = next
+    if (
+      before >= NEED_CRITICAL_THRESHOLD &&
+      next < NEED_CRITICAL_THRESHOLD &&
+      !fired[k]
+    ) {
+      fired[k] = true
+      events.push({
+        round:      ctx.round,
+        agentName:  agent.name,
+        category:   'need_critical',
+        content:    `${agent.name} is becoming desperate for ${k}.`,
+      })
+    }
+  }
+  return {
+    agent: { ...agent, needs: newNeeds, _firedNeedCritical: fired },
+    events,
+  }
+}
+
+// ── Mortality ────────────────────────────────────────────────────────────────
+// mortalityRisk is recomputed each round from age vs lifeExpectancy and health.
+// We model risk as a smoothly rising probability from age 0 to 1.5 * life-
+// Expectancy, with poor health amplifying it. The probability is then scaled
+// to the round duration so a 1-hour round is much safer than a 1-year round.
+export function computeMortalityRisk(agent) {
+  const ratio = agent.age / Math.max(agent.lifeExpectancy, 1)
+  // Cubic ramp: ~0 in youth, ~1 around 1.5x life expectancy
+  const ageComponent = Math.min(1, Math.max(0, ratio ** 3 / 3.375)) // 1.5^3 = 3.375
+  const healthMultiplier = 1 + (1 - agent.health) // poor health up to 2x risk
+  return Math.min(1, ageComponent * healthMultiplier)
+}
+
+// Sample a death event using the per-year mortality risk scaled to this round.
+export function mortalityCheck(agent, ctx, rng = Math.random) {
+  if (!agent.alive) return { agent, events: [] }
+  const annualRisk = computeMortalityRisk(agent)
+  const roundFraction = TIME_UNIT_YEARS[ctx.timeUnit] ?? 0
+  // Convert annual probability to per-round via 1 - (1 - p)^fraction
+  const perRoundRisk = 1 - Math.pow(1 - annualRisk, roundFraction)
+  const updatedAgent = { ...agent, mortalityRisk: perRoundRisk }
+
+  if (rng() < perRoundRisk) {
+    return {
+      agent: { ...updatedAgent, alive: false },
+      events: [{
+        round:      ctx.round,
+        agentName:  agent.name,
+        category:   'death',
+        content:    `${agent.name} died at age ${agent.age.toFixed(1)}.`,
+      }],
+    }
+  }
+  return { agent: updatedAgent, events: [] }
+}
+
+// ── Aging milestone log ──────────────────────────────────────────────────────
+// For long-unit simulations we want occasional "aging" events so the log isn't
+// silent. Emits one aging event when an agent crosses a whole-year boundary,
+// up to a max of one per round per agent.
+export function maybeLogAgingMilestone(agentBefore, agentAfter, ctx) {
+  if (!agentAfter.alive) return []
+  const beforeYear = Math.floor(agentBefore.age)
+  const afterYear  = Math.floor(agentAfter.age)
+  if (afterYear > beforeYear) {
+    return [{
+      round:     ctx.round,
+      agentName: agentAfter.name,
+      category:  'aging',
+      content:   `${agentAfter.name} is now ${afterYear}.`,
+    }]
+  }
+  return []
+}
