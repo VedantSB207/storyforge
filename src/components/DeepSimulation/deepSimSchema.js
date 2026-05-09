@@ -106,6 +106,11 @@ export const CENSUS_MULTIPLIER = 5
 export const TAXONOMY_MODEL = 'claude-sonnet-4-20250514'
 export const TAXONOMY_MAX_TOKENS = 2000
 
+// Phase 2.5 narrative summary — one Claude call after the round loop
+// completes, produces a flowing prose chronicle for the writer.
+export const NARRATIVE_MODEL = 'claude-sonnet-4-20250514'
+export const NARRATIVE_MAX_TOKENS = 1500
+
 // Allowed values for kind.typicalSize (sorted small→large)
 export const KIND_SIZES = ['tiny', 'small', 'medium', 'large', 'huge']
 
@@ -144,6 +149,15 @@ export const EMPTY_TAXONOMY = {
   generatedAt: null,
   contentFingerprint: '',
 }
+
+// Phase 2.5 narrative shape — saved alongside each deepSimulationHistory entry
+export const NARRATIVE_SCHEMA = Object.freeze({
+  headline:       'string (one-line summary, 8-12 words)',
+  narrative:      'string (2-4 paragraphs of prose chronicle)',
+  notableEvents:  'string[] (3-5 story-language bullets)',
+  generatedAt:    'ISO timestamp',
+  usage:          '{ input_tokens, output_tokens } — for cost tracking',
+})
 
 // Generic value/fear pools for procedural NPCs. Phase 4 will replace with
 // LLM enrichment for the active cast. Phase 2 just needs them to exist.

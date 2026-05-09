@@ -1,7 +1,7 @@
 # StoryForge Deep Simulation Engine
 ## Implementation Design Document
 
-**Version 1.1**
+**Version 1.2**
 **Branch:** `deep-simulation-rebuild`
 **Document location in repo:** `docs/SIMULATION_ENGINE_DESIGN.md`
 
@@ -291,6 +291,8 @@ Writer sets two values:
 The engine adjusts mortality probabilities, birth rates, message travel times, and memory decay based on the time unit. Short scenarios (12 hours over 12 rounds) ignore aging. Long scenarios (30 years over 60 rounds) give dynastic mechanics meaningful time to play out.
 
 ### Output system
+
+**End-of-run narrative summary** (added in Phase 2.5) — one Claude API call after the round loop completes, produces a flowing prose chronicle for the writer. Replaces a wall of state telemetry as the primary results display. Returns headline + 2–4 paragraphs + 3–5 notable-event bullets in story language. Per-call cost is comparable to taxonomy detection (~$0.02–0.05 depending on event log size). The detailed event log is preserved beneath as a collapsible technical view.
 
 **Progressive mode output** — eight sections (nine if Narrative Divergence Engine is active):
 
@@ -633,3 +635,7 @@ When this document is updated by future Claude Code sessions, the version number
   - IPC handler not needed (existing save-project handles new fields)
   - char.traits and char.secrets normalised at AgentFactory boundary
   - Dashboard.jsx unchanged (tab ID stable, only label changed)
+
+**Version 1.2** — Phase 2.5: narrative summary wrapper added; Add Genre button fix in TaxonomyReview.
+  - End-of-run narrative chronicle (one Claude call) added to results screen
+  - TaxonomyReview "Add Genre" / "Add Kind" buttons fixed (window.prompt is disabled in Electron renderer; replaced with inline text inputs)

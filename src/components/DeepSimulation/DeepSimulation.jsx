@@ -6,6 +6,7 @@ import { EventLog } from './EventLog.jsx'
 import { TaxonomyReview } from './TaxonomyReview.jsx'
 import { generateTaxonomy, fingerprintContent, estimateCostUSD } from './worldTaxonomy.js'
 import { buildCensus } from './CensusManager.js'
+import { generateNarrativeSummary, estimateNarrativeCostUSD } from './narrativeSummary.js'
 
 const CAST_SIZES = [50, 200, 500, 1000, 2000]
 const LIVE_LOG_TAIL = 80   // most recent N events shown during running screen
@@ -51,6 +52,8 @@ export function DeepSimulation({
   // Final result
   const [finalSnapshot, setFinalSnapshot] = useState(null)
   const [censusStats, setCensusStats]     = useState(null)
+  const [narrative, setNarrative]         = useState(null)
+  const [narrativeError, setNarrativeError] = useState('')
 
   useEffect(() => { pauseRef.current = paused }, [paused])
 
@@ -147,6 +150,27 @@ export function DeepSimulation({
     const summary = buildSummary(lastSnap)
     setFinalSnapshot({ ...lastSnap, summary })
 
+    // ── Phase 2.5: narrative summary ─────────────────────────────────────
+    setStep('narrating')
+    setNarrative(null)
+    setNarrativeError('')
+    let narrativeOut = null
+    try {
+      narrativeOut = await generateNarrativeSummary({
+        simulationResult: { summary, events: lastSnap.events, agents: lastSnap.agents },
+        project,
+        taxonomy,
+        chars,
+        censusStats: built.stats,
+        roundCount,
+        timeUnit,
+      })
+      setNarrative(narrativeOut)
+    } catch (err) {
+      console.error('Narrative summary failed:', err)
+      setNarrativeError(err.message || String(err))
+    }
+
     const entry = {
       id:         genId(),
       timestamp:  new Date().toISOString(),
@@ -158,6 +182,7 @@ export function DeepSimulation({
       censusStats: built.stats,
       agents:     lastSnap.agents,
       events:     lastSnap.events,
+      narrative:  narrativeOut,          // Phase 2.5 — null if generation failed
       summary:    `${summary.alive}/${summary.total} alive, ${summary.dead} died over ${roundCount} ${timeUnit}-round${roundCount === 1 ? '' : 's'}. ${built.stats.boundCount} bound + ${built.stats.activeCastCount - built.stats.boundCount} procedural in cast (${built.stats.censusCount} census).`,
     }
     if (setDeepSimulationHistory) {
@@ -181,6 +206,8 @@ export function DeepSimulation({
     setFinalSnapshot(null)
     setAgentsLive([])
     setCensusStats(null)
+    setNarrative(null)
+    setNarrativeError('')
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -389,51 +416,150 @@ export function DeepSimulation({
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // RESULTS
+  // NARRATING (Phase 2.5)
+  // ─────────────────────────────────────────────────────────────────────────
+  if (step === 'narrating') {
+    return (
+      <div style={{ padding: 48, maxWidth: 560, margin: '0 auto', textAlign: 'center', fontFamily: 'Georgia,serif' }}>
+        <div style={{ fontSize: 16, color: C.purpleLight, marginBottom: 6, fontStyle: 'italic' }}>Reading the chronicle…</div>
+        <div style={{ fontSize: 11, color: C.muted, fontFamily: 'system-ui', marginBottom: 24 }}>
+          The simulation completed. Translating {fullEventsRef.current.length} event{fullEventsRef.current.length === 1 ? '' : 's'} into story.
+        </div>
+        <div style={{ display: 'inline-block', width: 28, height: 28, border: `2px solid ${C.purple}33`, borderTopColor: C.purpleLight, borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    )
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // RESULTS (Phase 2.5 layout: Story → Notable → Final State → Event Log)
   // ─────────────────────────────────────────────────────────────────────────
   const summary = finalSnapshot?.summary
+  return <ResultsScreen
+    project={project}
+    summary={summary}
+    narrative={narrative}
+    narrativeError={narrativeError}
+    fullEvents={fullEventsRef.current}
+    censusStats={censusStats}
+    roundCount={roundCount}
+    timeUnit={timeUnit}
+    onNewSimulation={newSimulation}
+  />
+}
+
+// ─── Results screen (extracted; allows internal state for collapsibles) ────
+function ResultsScreen({ project, summary, narrative, narrativeError, fullEvents, censusStats, roundCount, timeUnit, onNewSimulation }) {
+  const [showStats, setShowStats]     = useState(false)
+  const [showLog, setShowLog]         = useState(false)
+
+  const narrativeCost = estimateNarrativeCostUSD(narrative?.usage)
+
   return (
     <div style={{ padding: 24, maxWidth: 820, margin: '0 auto', fontFamily: 'Georgia,serif' }}>
+      {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 }}>
         <div>
           <div style={{ fontSize: 15, color: C.purpleLight, fontWeight: 500 }}>Simulation Complete</div>
           <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', marginTop: 2 }}>
-            {censusStats ? `${censusStats.activeCastCount} cast (${censusStats.boundCount} bound + ${censusStats.activeCastCount - censusStats.boundCount} procedural) · census ${censusStats.censusCount}` : `${finalSnapshot?.agents?.length || 0} agents`} · {roundCount} {timeUnit}-rounds · progressive mode
+            {censusStats ? `${censusStats.activeCastCount} cast (${censusStats.boundCount} bound + ${censusStats.activeCastCount - censusStats.boundCount} procedural) · census ${censusStats.censusCount}` : 'agents'} · {roundCount} {timeUnit}-rounds · progressive mode
           </div>
         </div>
-        <button onClick={newSimulation} style={btnSecondary}>New Simulation</button>
+        <button onClick={onNewSimulation} style={btnSecondary}>New Simulation</button>
       </div>
 
-      {summary && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10, marginBottom: 16 }}>
-          <Stat label="Alive" value={`${summary.alive} / ${summary.total}`} col={C.green} />
-          <Stat label="Died" value={summary.dead} col={summary.dead > 0 ? C.accBright : C.muted} />
-          <Stat label="Avg Age" value={summary.avgAge.toFixed(1)} col={C.parch} />
-          <Stat label="Events" value={fullEventsRef.current.length} col={C.gold} />
-        </div>
-      )}
-
-      {summary && (
-        <div style={{ backgroundColor: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 6, padding: 14, marginBottom: 16 }}>
-          <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 8 }}>Average Needs (living agents)</div>
-          {Object.entries(summary.avgNeeds).map(([k, v]) => (
-            <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-              <span style={{ width: 100, fontSize: 11, color: C.mutedLight, fontFamily: 'system-ui', textTransform: 'capitalize' }}>{k}</span>
-              <div style={{ flex: 1, height: 6, backgroundColor: C.border, borderRadius: 3, overflow: 'hidden' }}>
-                <div style={{ width: `${v * 100}%`, height: '100%', backgroundColor: v < 0.2 ? C.accBright : v < 0.5 ? C.gold : C.green }} />
+      {/* THE STORY — top, expanded by default */}
+      <div style={{ backgroundColor: C.bgCard, border: `1px solid ${C.purple}55`, borderRadius: 8, padding: '20px 24px', marginBottom: 14, maxWidth: 720, marginLeft: 'auto', marginRight: 'auto' }}>
+        <div style={{ fontSize: 10, color: C.purple, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 10 }}>The Story</div>
+        {narrativeError ? (
+          <div style={{ padding: '10px 12px', backgroundColor: C.accBright + '12', border: `1px solid ${C.accBright}44`, borderRadius: 5, fontSize: 12, color: C.accBright, fontFamily: 'system-ui' }}>
+            Narrative summary failed: {narrativeError}
+          </div>
+        ) : !narrative ? (
+          <div style={{ fontSize: 12, color: C.muted, fontStyle: 'italic', fontFamily: 'system-ui' }}>(No narrative generated.)</div>
+        ) : (
+          <>
+            {narrative.headline && (
+              <div style={{ fontSize: 16, color: C.parch, fontStyle: 'italic', fontFamily: 'Georgia, serif', marginBottom: 14, lineHeight: 1.4 }}>
+                &ldquo;{narrative.headline}&rdquo;
               </div>
-              <span style={{ width: 40, textAlign: 'right', fontSize: 11, color: C.parch, fontFamily: 'system-ui' }}>{(v * 100).toFixed(0)}%</span>
+            )}
+            <div style={{ fontSize: 14, color: C.parch, fontFamily: 'Georgia, serif', lineHeight: 1.7 }}>
+              {narrative.narrative.split(/\n\n+/).map((para, i) => (
+                <p key={i} style={{ margin: i === 0 ? '0 0 12px' : '12px 0' }}>{para}</p>
+              ))}
             </div>
-          ))}
+            {narrativeCost != null && (
+              <div style={{ marginTop: 12, fontSize: 9, color: C.muted, fontFamily: 'system-ui', borderTop: `1px solid ${C.border}`, paddingTop: 6 }}>
+                {narrative.usage?.input_tokens || 0} in / {narrative.usage?.output_tokens || 0} out tokens · ${narrativeCost.toFixed(4)}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* NOTABLE EVENTS */}
+      {narrative?.notableEvents?.length > 0 && (
+        <div style={{ backgroundColor: C.bgCard, border: `1px solid ${C.gold}44`, borderRadius: 6, padding: '14px 18px', marginBottom: 14 }}>
+          <div style={{ fontSize: 10, color: C.gold, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: 10 }}>Notable Events</div>
+          <ul style={{ margin: 0, paddingLeft: 20 }}>
+            {narrative.notableEvents.map((m, i) => (
+              <li key={i} style={{ fontSize: 13, color: C.mutedLight, fontFamily: 'Georgia, serif', lineHeight: 1.6, marginBottom: 4, fontStyle: 'italic' }}>{m}</li>
+            ))}
+          </ul>
         </div>
       )}
 
-      <div style={{ backgroundColor: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 6, padding: 14 }}>
-        <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 10 }}>
-          Event Log — {fullEventsRef.current.length} event{fullEventsRef.current.length === 1 ? '' : 's'}
+      {/* FINAL STATE — collapsible, collapsed by default */}
+      <CollapsibleSection
+        title="Final State"
+        open={showStats}
+        onToggle={() => setShowStats(o => !o)}
+      >
+        {summary && (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10, marginBottom: 14 }}>
+              <Stat label="Alive" value={`${summary.alive} / ${summary.total}`} col={C.green} />
+              <Stat label="Died" value={summary.dead} col={summary.dead > 0 ? C.accBright : C.muted} />
+              <Stat label="Avg Age" value={summary.avgAge.toFixed(1)} col={C.parch} />
+              <Stat label="Events" value={fullEvents.length} col={C.gold} />
+            </div>
+            <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 8 }}>Average Needs (living)</div>
+            {Object.entries(summary.avgNeeds).map(([k, v]) => (
+              <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                <span style={{ width: 100, fontSize: 11, color: C.mutedLight, fontFamily: 'system-ui', textTransform: 'capitalize' }}>{k}</span>
+                <div style={{ flex: 1, height: 6, backgroundColor: C.border, borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{ width: `${v * 100}%`, height: '100%', backgroundColor: v < 0.2 ? C.accBright : v < 0.5 ? C.gold : C.green }} />
+                </div>
+                <span style={{ width: 40, textAlign: 'right', fontSize: 11, color: C.parch, fontFamily: 'system-ui' }}>{(v * 100).toFixed(0)}%</span>
+              </div>
+            ))}
+          </>
+        )}
+      </CollapsibleSection>
+
+      {/* EVENT LOG — collapsible, collapsed by default */}
+      <CollapsibleSection
+        title={`Event Log — ${fullEvents.length} event${fullEvents.length === 1 ? '' : 's'}`}
+        open={showLog}
+        onToggle={() => setShowLog(o => !o)}
+      >
+        <div style={{ maxHeight: 480, overflow: 'auto' }}>
+          <EventLog events={fullEvents} emptyText="No events fired during this run." />
         </div>
-        <EventLog events={fullEventsRef.current} emptyText="No events fired during this run." />
-      </div>
+      </CollapsibleSection>
+    </div>
+  )
+}
+
+function CollapsibleSection({ title, open, onToggle, children }) {
+  return (
+    <div style={{ backgroundColor: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 6, marginBottom: 10, overflow: 'hidden' }}>
+      <button onClick={onToggle} style={{ width: '100%', padding: '10px 14px', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', textAlign: 'left' }}>
+        <span style={{ fontSize: 11, color: C.muted, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.12em' }}>{title}</span>
+        <span style={{ fontSize: 11, color: C.muted, fontFamily: 'system-ui' }}>{open ? '−' : '+'}</span>
+      </button>
+      {open && <div style={{ padding: '0 14px 14px' }}>{children}</div>}
     </div>
   )
 }

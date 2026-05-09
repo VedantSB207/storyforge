@@ -17,6 +17,11 @@ export function TaxonomyReview({
 }) {
   const [reasoningOpen, setReasoningOpen]   = useState(true)
   const [expandedGenres, setExpandedGenres] = useState({})
+  const [newGenreName, setNewGenreName]     = useState('')
+  const [addingGenre, setAddingGenre]       = useState(false)
+  const [newKindFor, setNewKindFor]         = useState(null)   // genre id currently adding a kind to
+  const [newKindName, setNewKindName]       = useState('')
+  const [errMsg, setErrMsg]                 = useState('')
 
   const toggleExpand = (id) => setExpandedGenres(p => ({ ...p, [id]: !p[id] }))
 
@@ -45,36 +50,42 @@ export function TaxonomyReview({
     })
   }
 
-  const addGenre = () => {
-    const name = prompt('Name for the new genre? (e.g. "Mythology", "Spirits")')
-    if (!name?.trim()) return
-    const id = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_')
+  const commitNewGenre = () => {
+    setErrMsg('')
+    const name = newGenreName.trim()
+    if (!name) { setErrMsg('Genre name cannot be empty.'); return }
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_')
     if (taxonomy.genres.some(g => g.id === id)) {
-      alert('A genre with that id already exists.')
+      setErrMsg(`A genre named "${name}" already exists.`)
       return
     }
     setTaxonomy({
       ...taxonomy,
       genres: [...taxonomy.genres, {
-        id, name: name.trim(), detected: false, weight: 0.2, kinds: [],
+        id, name, detected: false, weight: 0.2, kinds: [],
       }],
     })
     setExpandedGenres(p => ({ ...p, [id]: true }))
+    setNewGenreName('')
+    setAddingGenre(false)
   }
 
-  const addKind = (gid) => {
-    const name = prompt('Name for the new kind? (e.g. "Wolf", "Witch", "Drone")')
-    if (!name?.trim()) return
-    const kid = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_') + '_' + genId().slice(0, 3)
+  const commitNewKind = (gid) => {
+    setErrMsg('')
+    const name = newKindName.trim()
+    if (!name) { setErrMsg('Kind name cannot be empty.'); return }
+    const kid = name.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '_' + genId().slice(0, 3)
     updateGenre(gid, {
       kinds: [
         ...taxonomy.genres.find(g => g.id === gid).kinds,
         {
-          id: kid, name: name.trim(), included: true,
+          id: kid, name, included: true,
           typicalTraits: [], typicalLifeExpectancy: 30, typicalSize: 'medium', typicalCount: 5,
         },
       ],
     })
+    setNewKindName('')
+    setNewKindFor(null)
   }
 
   const removeKind = (gid, kid) => {
@@ -133,15 +144,38 @@ export function TaxonomyReview({
               onUpdate={(patch) => updateGenre(g.id, patch)}
               onRemove={() => removeGenre(g.id)}
               onUpdateKind={(kid, patch) => updateKind(g.id, kid, patch)}
-              onAddKind={() => addKind(g.id)}
               onRemoveKind={(kid) => removeKind(g.id, kid)}
+              addingKind={newKindFor === g.id}
+              onStartAddKind={() => { setNewKindFor(g.id); setNewKindName(''); setErrMsg('') }}
+              onCancelAddKind={() => { setNewKindFor(null); setNewKindName(''); setErrMsg('') }}
+              onCommitAddKind={() => commitNewKind(g.id)}
+              newKindName={newKindName}
+              setNewKindName={setNewKindName}
             />
           ))}
         </div>
       )}
 
       {/* Add genre */}
-      <button onClick={addGenre} style={{ marginTop: 12, padding: '8px 14px', backgroundColor: 'transparent', color: C.purpleLight, border: `1px dashed ${C.purple}66`, borderRadius: 5, fontSize: 11, cursor: 'pointer', fontFamily: 'system-ui', width: '100%' }}>+ Add Genre</button>
+      {addingGenre ? (
+        <div style={{ marginTop: 12, padding: 10, backgroundColor: C.bgCard, border: `1px solid ${C.purple}66`, borderRadius: 5, display: 'flex', gap: 6, alignItems: 'center' }}>
+          <input
+            autoFocus
+            value={newGenreName}
+            onChange={e => setNewGenreName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') commitNewGenre(); if (e.key === 'Escape') { setAddingGenre(false); setNewGenreName(''); setErrMsg('') } }}
+            placeholder='New genre name (e.g. "Mythology", "Spirits")'
+            style={{ flex: 1, padding: '6px 10px', backgroundColor: C.bg, color: C.parch, border: `1px solid ${C.borderMid}`, borderRadius: 4, fontSize: 12, outline: 'none', fontFamily: 'system-ui' }}
+          />
+          <button onClick={commitNewGenre} style={{ padding: '6px 12px', backgroundColor: C.purple, color: '#fff', border: 'none', borderRadius: 4, fontSize: 11, cursor: 'pointer', fontFamily: 'system-ui' }}>Save</button>
+          <button onClick={() => { setAddingGenre(false); setNewGenreName(''); setErrMsg('') }} style={{ padding: '6px 10px', backgroundColor: 'transparent', color: C.muted, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 11, cursor: 'pointer', fontFamily: 'system-ui' }}>Cancel</button>
+        </div>
+      ) : (
+        <button onClick={() => { setAddingGenre(true); setErrMsg('') }} style={{ marginTop: 12, padding: '8px 14px', backgroundColor: 'transparent', color: C.purpleLight, border: `1px dashed ${C.purple}66`, borderRadius: 5, fontSize: 11, cursor: 'pointer', fontFamily: 'system-ui', width: '100%' }}>+ Add Genre</button>
+      )}
+      {errMsg && (
+        <div style={{ marginTop: 6, fontSize: 11, color: C.accBright, fontFamily: 'system-ui' }}>{errMsg}</div>
+      )}
 
       {/* Confirm */}
       <button
@@ -164,7 +198,10 @@ export function TaxonomyReview({
 }
 
 // ── Genre card ──────────────────────────────────────────────────────────────
-function GenreCard({ genre, expanded, onToggleExpand, onUpdate, onRemove, onUpdateKind, onAddKind, onRemoveKind }) {
+function GenreCard({
+  genre, expanded, onToggleExpand, onUpdate, onRemove, onUpdateKind, onRemoveKind,
+  addingKind, onStartAddKind, onCancelAddKind, onCommitAddKind, newKindName, setNewKindName,
+}) {
   const includedCount = genre.kinds.filter(k => k.included !== false).length
   return (
     <div style={{ backgroundColor: C.bgCard, border: `1px solid ${genre.detected ? C.purple + '44' : C.gold + '44'}`, borderRadius: 6 }}>
@@ -208,7 +245,22 @@ function GenreCard({ genre, expanded, onToggleExpand, onUpdate, onRemove, onUpda
               ))}
             </div>
           )}
-          <button onClick={onAddKind} style={{ marginTop: 6, padding: '5px 10px', backgroundColor: 'transparent', color: C.gold, border: `1px dashed ${C.gold}55`, borderRadius: 4, fontSize: 10, cursor: 'pointer', fontFamily: 'system-ui' }}>+ Add Kind</button>
+          {addingKind ? (
+            <div style={{ marginTop: 6, padding: '6px 8px', backgroundColor: C.bg, border: `1px solid ${C.gold}55`, borderRadius: 4, display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                autoFocus
+                value={newKindName}
+                onChange={e => setNewKindName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') onCommitAddKind(); if (e.key === 'Escape') onCancelAddKind() }}
+                placeholder='New kind name (e.g. "Wolf", "Witch", "Drone")'
+                style={{ flex: 1, padding: '4px 8px', backgroundColor: C.bgCard, color: C.parch, border: `1px solid ${C.borderMid}`, borderRadius: 3, fontSize: 11, outline: 'none', fontFamily: 'system-ui' }}
+              />
+              <button onClick={onCommitAddKind} style={{ padding: '4px 10px', backgroundColor: C.gold, color: C.bg, border: 'none', borderRadius: 3, fontSize: 10, cursor: 'pointer', fontFamily: 'system-ui', fontWeight: 'bold' }}>Save</button>
+              <button onClick={onCancelAddKind} style={{ padding: '4px 8px', backgroundColor: 'transparent', color: C.muted, border: `1px solid ${C.border}`, borderRadius: 3, fontSize: 10, cursor: 'pointer', fontFamily: 'system-ui' }}>Cancel</button>
+            </div>
+          ) : (
+            <button onClick={onStartAddKind} style={{ marginTop: 6, padding: '5px 10px', backgroundColor: 'transparent', color: C.gold, border: `1px dashed ${C.gold}55`, borderRadius: 4, fontSize: 10, cursor: 'pointer', fontFamily: 'system-ui' }}>+ Add Kind</button>
+          )}
         </div>
       )}
     </div>
