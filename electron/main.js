@@ -308,6 +308,28 @@ ipcMain.handle('library-save-blob', async (_, { projectId, filename, dataBase64 
   return { ok: true }
 })
 
+// Read a specific library file's text content
+ipcMain.handle('library-read-file', async (_, filePath) => {
+  try {
+    const ext = path.extname(filePath).toLowerCase()
+    if (ext === '.txt' || ext === '.md') {
+      return { content: fs.readFileSync(filePath, 'utf8') }
+    }
+    if (ext === '.docx') {
+      const mammoth = require('mammoth')
+      const result = await mammoth.extractRawText({ path: filePath })
+      return { content: result.value }
+    }
+    if (ext === '.pdf') {
+      const pdfParse = require('pdf-parse')
+      const buffer = fs.readFileSync(filePath)
+      const data = await pdfParse(buffer)
+      return { content: data.text }
+    }
+    return { error: 'Unsupported file type: ' + ext }
+  } catch (err) { return { error: err.message } }
+})
+
 // Save file with native dialog
 ipcMain.handle('save-file-dialog', async (_, { defaultName, dataBase64, filters }) => {
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {

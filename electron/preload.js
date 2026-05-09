@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   libraryExportFile: (projectId, filename)              => ipcRenderer.invoke('library-export-file', { projectId, filename }),
   libraryUpdateMeta: (projectId, filename, updates)     => ipcRenderer.invoke('library-update-meta', { projectId, filename, updates }),
   librarySaveBlob:   (projectId, filename, dataBase64)  => ipcRenderer.invoke('library-save-blob', { projectId, filename, dataBase64 }),
+  libraryReadFile:   (filePath)                          => ipcRenderer.invoke('library-read-file', filePath),
   saveFileDialog:    (defaultName, dataBase64, filters)  => ipcRenderer.invoke('save-file-dialog', { defaultName, dataBase64, filters }),
 
   // Platform flag — lets React know it's running inside Electron
