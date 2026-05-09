@@ -10,9 +10,11 @@ const SYSTEM_PROMPT = `You are writing a brief narrative chronicle of a simulati
 
 Read the events as story material, not status updates. Name characters who appear, especially the Story Bible characters by their actual names. Describe events in narrative prose. Documentary tone, like a chronicler observing — not breathless, not over-dramatic. 2 to 4 paragraphs.
 
+Different characters witnessed different things or heard distorted versions. Use this in your chronicle — when you mention a major event, sometimes name who saw it firsthand and who heard rumours of it. The asymmetry is part of the story; what someone *thinks* happened is often more revealing than what actually happened. Honor those perspective gaps when they appear in the source material.
+
 Be honest if the simulation was uneventful. If little happened, lean into the existential quiet — say so as story rather than padding. A short, true chronicle is better than a long, padded one.
 
-Do NOT use technical terms. No 'agent', 'round', 'tier', 'NPC', 'simulation', 'cast', 'census', 'mortality', 'depletion', 'state'. Use story language: characters live, age, hunger, fear, die. Time passes. Seasons turn.
+Do NOT use technical terms. No 'agent', 'round', 'tier', 'NPC', 'simulation', 'cast', 'census', 'mortality', 'depletion', 'state', 'propagation', 'hop'. Use story language: characters live, age, hunger, fear, die. Time passes. Seasons turn. Word travels — accurately, or not.
 
 Return ONLY a JSON object, no preamble or trailing text:
 
@@ -23,7 +25,7 @@ Return ONLY a JSON object, no preamble or trailing text:
 }`
 
 // Build the user payload — keeps token use bounded even for huge runs
-function buildUserContent({ project, taxonomy, chars, summary, events, roundCount, timeUnit, censusStats }) {
+function buildUserContent({ project, taxonomy, chars, summary, events, roundCount, timeUnit, censusStats, agents = [], butterflyStats = null }) {
   const parts = []
 
   parts.push(`# Project\nTitle: ${project?.title || 'Untitled'}${project?.genre ? ` (${project.genre})` : ''}`)
@@ -62,6 +64,31 @@ ${censusStats ? `- Active cast: ${censusStats.activeCastCount} (${censusStats.bo
   // Event log digest — keep it bounded
   parts.push('# Events that occurred (raw log, your raw material)')
   parts.push(digestEvents(events))
+
+  // Phase 3 — multi-perspective Knowledge sample for bound characters
+  const boundAgents = agents.filter(a => a?.source === 'bound' && Array.isArray(a.knownFacts) && a.knownFacts.length > 0)
+  if (boundAgents.length > 0) {
+    parts.push('# What the named characters know (multi-perspective sample)')
+    const lines = []
+    for (const a of boundAgents.slice(0, 5)) {
+      const sample = [...a.knownFacts]
+        .sort((x, y) => (y.confidence || 0) - (x.confidence || 0))
+        .slice(0, 4)
+      const knowledgeLines = sample.map(k => {
+        const sourceTag = k.source === 'firsthand'
+          ? 'witnessed firsthand'
+          : `heard from ${k.source}, ${k.hops} hop${k.hops === 1 ? '' : 's'} away, confidence ${k.confidence.toFixed(2)}`
+        return `    - "${k.content}" (${sourceTag})`
+      }).join('\n')
+      lines.push(`  ${a.name}:\n${knowledgeLines}`)
+    }
+    parts.push(lines.join('\n\n'))
+  }
+
+  if (butterflyStats) {
+    parts.push(`# Information graph
+${butterflyStats.eventCount} origin events propagated through ${butterflyStats.knowledgeCount} pieces of knowledge across ${butterflyStats.edgeCount} hops.`)
+  }
 
   return parts.join('\n\n')
 }
@@ -142,6 +169,8 @@ export async function generateNarrativeSummary({ simulationResult, project, taxo
     roundCount,
     timeUnit,
     censusStats,
+    agents: simulationResult.agents,
+    butterflyStats: simulationResult.butterflyStats,
   })
 
   let response

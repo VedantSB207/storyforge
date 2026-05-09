@@ -113,12 +113,19 @@ export function DeepSimulation({
                      : 1
 
     let lastSnap = null
+    // Phase 3: deterministic seed so the same simulation reproduces. Derived
+    // from project id + cast/round params; user can re-run to get same result.
+    const seed = hashSeed(`${project?.id || 'noproj'}|${castSize}|${roundCount}|${timeUnit}|${Date.now()}`)
     try {
       const gen = runSimulationRounds({
         initialAgents: built.activeCast,
         roundCount,
         timeUnit,
         yieldEvery,
+        // Phase 3 additions
+        lore,
+        chars,
+        seed,
       })
 
       for await (const snap of gen) {
@@ -157,7 +164,12 @@ export function DeepSimulation({
     let narrativeOut = null
     try {
       narrativeOut = await generateNarrativeSummary({
-        simulationResult: { summary, events: lastSnap.events, agents: lastSnap.agents },
+        simulationResult: {
+          summary,
+          events:        lastSnap.events,
+          agents:        lastSnap.agents,
+          butterflyStats: lastSnap.butterflyStats,
+        },
         project,
         taxonomy,
         chars,
@@ -178,11 +190,14 @@ export function DeepSimulation({
       castSize,
       roundCount,
       timeUnit,
-      taxonomy,                          // taxonomy snapshot for reproducibility
+      seed,                                       // Phase 3: lets the writer re-run the same world
+      taxonomy,                                   // taxonomy snapshot for reproducibility
       censusStats: built.stats,
       agents:     lastSnap.agents,
       events:     lastSnap.events,
-      narrative:  narrativeOut,          // Phase 2.5 — null if generation failed
+      butterflyStats: lastSnap.butterflyStats,    // Phase 3: trace stats summary (full trace too big for save)
+      llmCallsTotal: lastSnap.llmCallsTotal,
+      narrative:  narrativeOut,                   // Phase 2.5 — null if generation failed
       summary:    `${summary.alive}/${summary.total} alive, ${summary.dead} died over ${roundCount} ${timeUnit}-round${roundCount === 1 ? '' : 's'}. ${built.stats.boundCount} bound + ${built.stats.activeCastCount - built.stats.boundCount} procedural in cast (${built.stats.censusCount} census).`,
     }
     if (setDeepSimulationHistory) {
@@ -655,6 +670,16 @@ const btnSecondary = {
   fontSize: 11,
   cursor: 'pointer',
   fontFamily: 'system-ui',
+}
+
+// FNV-1a hash → 32-bit unsigned int. Used to seed the simulation RNG.
+function hashSeed(str) {
+  let h = 0x811c9dc5
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i)
+    h = (h * 0x01000193) >>> 0
+  }
+  return h
 }
 
 function formatHorizon(rounds, unit) {

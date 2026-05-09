@@ -111,6 +111,52 @@ export const TAXONOMY_MAX_TOKENS = 2000
 export const NARRATIVE_MODEL = 'claude-sonnet-4-20250514'
 export const NARRATIVE_MAX_TOKENS = 1500
 
+// ─── Phase 3 additions: information propagation ────────────────────────────
+
+// LLM distortion budget. Trait-based distortion is unlimited (free). LLM
+// distortion is reserved for hops that involve bound characters or
+// plot-critical events. Caps protect against runaway cost on huge sims.
+export const MAX_LLM_DISTORTION_CALLS_PER_ROUND = 5
+export const MAX_LLM_DISTORTION_CALLS_PER_SIM   = 100
+
+// Hop ceiling — stops a rumour cascade from running forever.
+export const PROPAGATION_HOP_LIMIT = 3
+
+// Confidence decay per hop. After 3 hops at 0.7^hop you reach ~0.34, still
+// above the floor; after 7 you'd be at ~0.082, below the floor.
+export const CONFIDENCE_DECAY_PER_HOP = 0.7
+
+// Stop propagating once a hop's resulting confidence would fall below this.
+export const CONFIDENCE_FLOOR = 0.1
+
+// Per-transmitter cap on receivers per hop. Prevents one well-connected
+// agent from broadcasting to everyone at once.
+export const MAX_GOSSIP_RECEIVERS_PER_HOP = 3
+
+// Probabilities for gossip transmission per relationship type.
+export const GOSSIP_PROB_BONDED      = 0.8   // intensity * trust applied on top
+export const GOSSIP_PROB_SAME_REGION = 0.25
+export const GOSSIP_PROB_ADJACENT    = 0.10
+
+// Which event categories propagate? Aging is private (a personal milestone),
+// so we only propagate deaths and need-critical events. Death of bound
+// characters is also flagged plot-critical for LLM-distortion priority.
+export const PROPAGATABLE_CATEGORIES = ['death', 'need_critical']
+
+// Knowledge entry shape — was placeholder in Phase 1, populated in Phase 3.
+export const KNOWLEDGE_SCHEMA = Object.freeze({
+  id:             'string (kn_<n>)',
+  originEventId:  'string (ev_<n>) — points to the trace event node',
+  source:         "'firsthand' | <transmitter agent name>",
+  sourceAgentId:  'string (agent id, even when source is firsthand)',
+  ownerId:        'string (the agent who holds this Knowledge)',
+  content:        'string (event as this agent understands it; may be distorted)',
+  confidence:     'number 0-1',
+  roundLearned:   'number',
+  hops:           'number (0 = firsthand, n = n hops removed)',
+  distortionMode: "'witness' | 'trait' | 'llm' | 'trait_fallback' (absent when hops=0)",
+})
+
 // Allowed values for kind.typicalSize (sorted small→large)
 export const KIND_SIZES = ['tiny', 'small', 'medium', 'large', 'huge']
 

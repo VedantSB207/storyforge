@@ -68,7 +68,8 @@ export function createAgentFromBibleCharacter(char) {
     secrets:         splitSecrets(char.secrets),
     memoryDecayRate: 0.1,
 
-    // Layer 7 — Position (placeholder Phase 1)
+    // Layer 7 — Position (assigned by positionGraph at runner init)
+    region:   'unknown',          // Phase 3: filled by initialisePositions
     location: {
       region: 'unknown',
       town:   'unknown',

@@ -47,6 +47,7 @@ export function depleteNeeds(agent, ctx) {
       fired[k] = true
       events.push({
         round:      ctx.round,
+        agentId:    agent.id,
         agentName:  agent.name,
         category:   'need_critical',
         content:    `${agent.name} is becoming desperate for ${k}.`,
@@ -86,6 +87,7 @@ export function mortalityCheck(agent, ctx, rng = Math.random) {
       agent: { ...updatedAgent, alive: false },
       events: [{
         round:      ctx.round,
+        agentId:    agent.id,
         agentName:  agent.name,
         category:   'death',
         content:    `${agent.name} died at age ${agent.age.toFixed(1)}.`,
@@ -106,6 +108,7 @@ export function maybeLogAgingMilestone(agentBefore, agentAfter, ctx) {
   if (afterYear > beforeYear) {
     return [{
       round:     ctx.round,
+      agentId:   agentAfter.id,
       agentName: agentAfter.name,
       category:  'aging',
       content:   `${agentAfter.name} is now ${afterYear}.`,

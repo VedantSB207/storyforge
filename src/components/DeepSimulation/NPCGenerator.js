@@ -95,7 +95,8 @@ export function createProceduralAgent({ genreId, kindTemplate, rng = Math.random
     secrets:         [],
     memoryDecayRate: 0.1,
 
-    // Layer 7 — Position (placeholder; CensusManager may overwrite later)
+    // Layer 7 — Position (placeholder; positionGraph fills region at runner init)
+    region:   'unknown',
     location: { region: 'unknown', town: 'unknown', place: 'unknown' },
     travelSpeed:        1,
     socialEmbeddedness: [],
