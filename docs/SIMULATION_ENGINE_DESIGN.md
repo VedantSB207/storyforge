@@ -1,7 +1,7 @@
 # StoryForge Deep Simulation Engine
 ## Implementation Design Document
 
-**Version 1.4**
+**Version 1.5**
 **Branch:** `deep-simulation-rebuild`
 **Document location in repo:** `docs/SIMULATION_ENGINE_DESIGN.md`
 
@@ -626,6 +626,14 @@ Implement the full event system with all nine categories. Build the propagation 
 
 Implement Progressive mode fully (including pause-and-inject). Implement Scenario mode with both auto and manual variant generation. Build the decision logic split between deterministic rules and LLM calls. Integrate Ollama tier routing for low-stakes work. Add LLM-based distortion for high-stakes hops. Implement cost reporting per simulation run.
 
+### Phase 4 split into 4a and 4b
+
+Phase 4 is the largest phase in the engine and is split for incremental verification:
+
+- **Phase 4a — Decisions, Actions, Ollama, Bonds.** Agents take actions based on needs, knowledge, and traits. Three-tier decision routing (deterministic / Ollama / Claude) controls cost. Bonds layer activates from interactions. Action events feed Phase 3 propagation. Progressive mode only. Dialogue and Scenario mode deferred.
+
+- **Phase 4b — Dialogue, Scenario mode.** Claude-generated dialogue snippets for plot-critical interactions between bound characters. Scenario mode (N variants from the same starting moment, comparison output). Builds on the Phase 4a action and bond infrastructure.
+
 ### Phase 5 — Output Specifications and UI
 
 Build all eight Progressive mode output panels (plus the ninth if NDE is active). Build all three Scenario mode views plus the recommendation panel. Implement the promotion flow for procedural NPCs. Integrate Deep Simulation insights into the Dashboard. Polish the full UI.
@@ -673,3 +681,5 @@ When this document is updated by future Claude Code sessions, the version number
   - Added save/load/list/delete IPC handlers (`<userData>/projects/<projectId>/deep-sims/<simId>.json`)
   - Migration helper auto-converts pre-3.5 inline-history entries on first mount
   - Eliminates ~80 MB writes on every state change at 1000-cast scale; project file now O(simulation count)
+
+**Version 1.5** — Phase 4 split into 4a and 4b documented. No code changes; planning capture only.
