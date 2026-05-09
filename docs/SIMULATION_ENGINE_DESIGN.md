@@ -1,7 +1,7 @@
 # StoryForge Deep Simulation Engine
 ## Implementation Design Document
 
-**Version 1.2**
+**Version 1.3**
 **Branch:** `deep-simulation-rebuild`
 **Document location in repo:** `docs/SIMULATION_ENGINE_DESIGN.md`
 
@@ -621,6 +621,21 @@ Build all eight Progressive mode output panels (plus the ninth if NDE is active)
 
 ---
 
+### Output as world experience — North Star for Phase 5
+
+The output of a Deep Simulation run is not a chronicle. It is the writer experiencing their own world from above. A successful output makes the writer feel they have visited their own world and returned with:
+
+- **Aerial perspective** — patterns and proportions across the whole world they could not see from inside individual scenes
+- **Blind spot detection** — places, factions, or character types their writing has under-served
+- **Character sparks** — unexpected moments from procedural NPCs that suggest new bound characters or new directions for existing ones
+- **Causal threads** — chains of cause and effect across time that reveal where the world's logic stretches or breaks
+- **Emotional weather** — the tone and pressure of the world over the simulated period
+- **Promotion candidates** — procedural agents that took on outsized importance and could be brought into the bound cast
+
+The narrative summary delivered in Phase 2.5 is a bridge to this experience, not the experience itself. Phase 5 must build the experience layer: visualisations, infographics, comparative panels, surprise highlights, spark cards. The raw event log is a debug substrate, not a deliverable.
+
+---
+
 ## End of document
 
 When this document is updated by future Claude Code sessions, the version number at the top is incremented and a brief changelog is added to the bottom.
@@ -639,3 +654,5 @@ When this document is updated by future Claude Code sessions, the version number
 **Version 1.2** — Phase 2.5: narrative summary wrapper added; Add Genre button fix in TaxonomyReview.
   - End-of-run narrative chronicle (one Claude call) added to results screen
   - TaxonomyReview "Add Genre" / "Add Kind" buttons fixed (window.prompt is disabled in Electron renderer; replaced with inline text inputs)
+
+**Version 1.3** — Output-as-world-experience North Star added for Phase 5. No code changes; vision capture only. This is the design intent for the output redesign that follows engine completion.
