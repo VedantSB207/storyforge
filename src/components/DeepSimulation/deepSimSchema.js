@@ -229,6 +229,19 @@ export const DECISION_SCHEMA = Object.freeze({
   usage:     '{ input_tokens, output_tokens } | null',
 })
 
+// Phase 4b/3 — Dialogue scene shape (one Sonnet call per scene).
+export const DIALOGUE_SCHEMA = Object.freeze({
+  id:             'string (dlg_<n>)',
+  round:          'number',
+  eventId:        'string',
+  eventCategory:  "'cooperation' | 'conflict' | 'betrayal' | 'death'",
+  eventContent:   'string',
+  participants:   '[{ agentId, name }]',
+  lines:          '[{ speaker, line }]',
+  generationCost: 'number USD',
+  usage:          '{ input_tokens, output_tokens } | null',
+})
+
 export const BOND_SCHEMA = Object.freeze({
   otherId:          'string (agent id)',
   type:             "'weak' | 'friendship' | 'love' | 'kinship' | 'rivalry' | 'enmity'",

@@ -26,6 +26,7 @@ import { propagateRound, resetKidCounter } from './propagation.js'
 import { decideRoundBatched } from './decisionLogic.js'
 import { resolveAction } from './actions.js'
 import { applyCoWitnessBonus, updateBondFromEvent, decayBonds } from './bondsLayer.js'
+import { selectDialogueCandidates, generateDialogues } from './dialogue.js'
 import {
   MAX_LLM_DISTORTION_CALLS_PER_ROUND,
   MAX_LLM_DISTORTION_CALLS_PER_SIM,
@@ -227,6 +228,17 @@ export async function* runSimulationRounds({
     }
   }
 
+  // ── Phase 4b/3: Dialogue generation after rounds complete ──────────────
+  // Select up to MAX_DIALOGUES_PER_SIM moments deserving dialogue, generate
+  // each in parallel via Sonnet. Disabled when disableLLM is set.
+  let dialogues = []
+  if (!disableLLM) {
+    const candidates = selectDialogueCandidates(allEvents, agentById, 0)
+    if (candidates.length > 0) {
+      dialogues = await generateDialogues({ candidates, agentById })
+    }
+  }
+
   // Final yield with full diagnostics
   yield {
     round: roundCount,
@@ -241,6 +253,7 @@ export async function* runSimulationRounds({
     llmUsageAll: llmDistortionUsageAll,
     tierCounters: { ...tierCounters },
     actionCounts: { ...actionCounts },
+    dialogues,
     progress: 1,
     final: true,
   }

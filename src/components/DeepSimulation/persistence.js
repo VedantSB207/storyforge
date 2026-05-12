@@ -49,6 +49,7 @@ export function entryToMetadata(entry) {
     censusStats:       entry.censusStats   || null,
     butterflyStats:    entry.butterflyStats || null,
     llmCallsTotal:     entry.llmCallsTotal ?? null,
+    dialogueCount:     Array.isArray(entry.dialogues) ? entry.dialogues.length : 0,
   }
 }
 
@@ -82,6 +83,8 @@ export function entryToFullPayload(entry) {
     butterflyTrace:   entry.butterflyTrace || null,
     narrative:        entry.narrative || null,
     llmCallsTotal:    entry.llmCallsTotal ?? null,
+    tierCounters:     entry.tierCounters || null,
+    dialogues:        entry.dialogues || [],
     summary:          entry.summary || '',
   }
 }

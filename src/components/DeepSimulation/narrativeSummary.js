@@ -16,6 +16,8 @@ Agents took actions during this simulation — they ate, rested, traveled, forme
 
 Be honest if the simulation was uneventful. If little happened, lean into the existential quiet — say so as story rather than padding. A short, true chronicle is better than a long, padded one.
 
+Some scenes have actual dialogue between characters captured below. When you describe these moments in the chronicle, you may quote a line if it serves the story — but don't quote at length, and don't quote every dialogue. Pick the lines that ring most true to the arc.
+
 Do NOT use technical terms. No 'agent', 'round', 'tier', 'NPC', 'simulation', 'cast', 'census', 'mortality', 'depletion', 'state', 'propagation', 'hop', 'bond intensity'. Use story language: characters live, age, hunger, fear, die. Time passes. Seasons turn. Word travels — accurately, or not. Friendships form. Trust breaks.
 
 Return ONLY a JSON object, no preamble or trailing text:
@@ -27,7 +29,7 @@ Return ONLY a JSON object, no preamble or trailing text:
 }`
 
 // Build the user payload — keeps token use bounded even for huge runs
-function buildUserContent({ project, taxonomy, chars, summary, events, roundCount, timeUnit, censusStats, agents = [], butterflyStats = null }) {
+function buildUserContent({ project, taxonomy, chars, summary, events, roundCount, timeUnit, censusStats, agents = [], butterflyStats = null, dialogues = [] }) {
   const parts = []
 
   parts.push(`# Project\nTitle: ${project?.title || 'Untitled'}${project?.genre ? ` (${project.genre})` : ''}`)
@@ -130,6 +132,17 @@ ${butterflyStats.eventCount} origin events propagated through ${butterflyStats.k
   if (boundBondLines.length > 0) {
     parts.push('# Bonds among bound characters at end of simulation')
     parts.push(boundBondLines.join('\n\n'))
+  }
+
+  // Phase 4b/3 — dialogue scenes for the chronicler to draw from
+  if (dialogues && dialogues.length > 0) {
+    const topDialogues = dialogues.slice(0, 5)
+    parts.push('# Dialogue scenes from key moments (you may quote sparingly)')
+    for (const d of topDialogues) {
+      const names = d.participants.map(p => p.name).join(' & ')
+      parts.push(`## Round ${d.round} — ${names} — ${d.eventCategory}`)
+      parts.push(d.lines.map(l => `${l.speaker}: "${l.line}"`).join('\n'))
+    }
   }
 
   // Action chains: cooperation/conflict/betrayal pairs in close rounds
@@ -235,6 +248,7 @@ export async function generateNarrativeSummary({ simulationResult, project, taxo
     censusStats,
     agents: simulationResult.agents,
     butterflyStats: simulationResult.butterflyStats,
+    dialogues: simulationResult.dialogues,
   })
 
   let response

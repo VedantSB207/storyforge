@@ -214,6 +214,7 @@ export function DeepSimulation({
           events:        lastSnap.events,
           agents:        lastSnap.agents,
           butterflyStats: lastSnap.butterflyStats,
+          dialogues:     lastSnap.dialogues,
         },
         project,
         taxonomy,
@@ -245,6 +246,8 @@ export function DeepSimulation({
       events:     lastSnap.events,
       butterflyStats: lastSnap.butterflyStats,
       llmCallsTotal: lastSnap.llmCallsTotal,
+      tierCounters:  lastSnap.tierCounters,
+      dialogues:     lastSnap.dialogues || [],   // Phase 4b/3
       narrative:  narrativeOut,
       summary:    `${summary.alive}/${summary.total} alive, ${summary.dead} died over ${roundCount} ${timeUnit}-round${roundCount === 1 ? '' : 's'}. ${built.stats.boundCount} bound + ${built.stats.activeCastCount - built.stats.boundCount} procedural in cast (${built.stats.censusCount} census).`,
     }
@@ -312,7 +315,12 @@ export function DeepSimulation({
         counts:   (full.events || []).reduce((m, e) => { m[e.category] = (m[e.category] || 0) + 1; return m }, {}),
       }
       fullEventsRef.current = full.events || []
-      setFinalSnapshot({ agents: full.agents || [], events: full.events || [], summary })
+      setFinalSnapshot({
+        agents: full.agents || [],
+        events: full.events || [],
+        summary,
+        dialogues: full.dialogues || [],   // Phase 4b/3
+      })
       setCensusStats(full.censusStats || null)
       setNarrative(full.narrative || null)
       setNarrativeError('')
@@ -578,6 +586,7 @@ export function DeepSimulation({
     narrative={narrative}
     narrativeError={narrativeError}
     fullEvents={fullEventsRef.current}
+    dialogues={finalSnapshot?.dialogues || []}
     censusStats={censusStats}
     roundCount={roundCount}
     timeUnit={timeUnit}
@@ -586,7 +595,7 @@ export function DeepSimulation({
 }
 
 // ─── Results screen (extracted; allows internal state for collapsibles) ────
-function ResultsScreen({ project, summary, narrative, narrativeError, fullEvents, censusStats, roundCount, timeUnit, onNewSimulation }) {
+function ResultsScreen({ project, summary, narrative, narrativeError, fullEvents, dialogues = [], censusStats, roundCount, timeUnit, onNewSimulation }) {
   const [showStats, setShowStats]     = useState(false)
   const [showLog, setShowLog]         = useState(false)
 
@@ -644,6 +653,32 @@ function ResultsScreen({ project, summary, narrative, narrativeError, fullEvents
               <li key={i} style={{ fontSize: 13, color: C.mutedLight, fontFamily: 'Georgia, serif', lineHeight: 1.6, marginBottom: 4, fontStyle: 'italic' }}>{m}</li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* DIALOGUE SCENES — Phase 4b/3, expanded by default */}
+      {dialogues.length > 0 && (
+        <div style={{ backgroundColor: C.bgCard, border: `1px solid ${C.purple}33`, borderRadius: 6, padding: '14px 18px', marginBottom: 14 }}>
+          <div style={{ fontSize: 10, color: C.purpleLight, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: 14 }}>
+            Dialogue Scenes ({dialogues.length})
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            {dialogues.map((d) => (
+              <div key={d.id} style={{ paddingLeft: 12, borderLeft: `2px solid ${C.purple}55` }}>
+                <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  Round {d.round} · {d.eventCategory} · {d.participants.map(p => p.name).join(' & ')}
+                </div>
+                <div style={{ fontSize: 13, fontFamily: 'Georgia, serif', color: C.parch, lineHeight: 1.7 }}>
+                  {d.lines.map((line, idx) => (
+                    <div key={idx} style={{ marginBottom: 4 }}>
+                      <span style={{ color: C.purpleLight, fontWeight: 600 }}>{line.speaker}:</span>{' '}
+                      <span style={{ fontStyle: 'italic' }}>&ldquo;{line.line}&rdquo;</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
