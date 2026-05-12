@@ -1,7 +1,7 @@
 # StoryForge Deep Simulation Engine
 ## Implementation Design Document
 
-**Version 1.5**
+**Version 1.6**
 **Branch:** `deep-simulation-rebuild`
 **Document location in repo:** `docs/SIMULATION_ENGINE_DESIGN.md`
 
@@ -634,6 +634,21 @@ Phase 4 is the largest phase in the engine and is split for incremental verifica
 
 - **Phase 4b — Dialogue, Scenario mode.** Claude-generated dialogue snippets for plot-critical interactions between bound characters. Scenario mode (N variants from the same starting moment, comparison output). Builds on the Phase 4a action and bond infrastructure.
 
+### Tier 1 architecture: migrated from Ollama to Claude Haiku 4.5
+
+The original Phase 4 design routed Tier 1 (procedural NPC decisions in ambiguous moments) through a local Ollama instance for cost discipline. In practice this proved unworkable at production scale: per-call latency on CPU inference grew from ~1s warm to 3-9s as prompts gained context, extrapolating to multi-hour wall times for 200-1000 cast simulations.
+
+Phase 4b migrates Tier 1 to Claude Haiku 4.5 via the Anthropic API. Trade-off summary:
+
+- **Wall time:** Haiku 4.5 with concurrent batching (10 parallel) brings 200-cast Progressive sims to under 5 minutes total
+- **Cost:** ~$1.00-1.50 per Progressive sim added (verify against current Haiku 4.5 pricing during first run)
+- **Reliability:** eliminates Ollama infrastructure dependency, warmup failures, and unavailability fallbacks
+- **Quality:** Haiku 4.5 reasoning at decision-tier prompts exceeds llama3.2:3b
+
+The `ollamaClient.js` module is preserved (marked deprecated) for potential future hybrid optimization (Path C in Phase 4 planning). Production Tier 1 calls route exclusively through Haiku.
+
+Tier classification tightened from ~18% Tier 1 to ~5% Tier 1 (Tier 1 becomes a tiebreaker for genuinely ambiguous decisions rather than a default for unbound/non-critical agents). This further reduces both wall time and Tier 1 cost.
+
 ### Phase 5 — Output Specifications and UI
 
 Build all eight Progressive mode output panels (plus the ninth if NDE is active). Build all three Scenario mode views plus the recommendation panel. Implement the promotion flow for procedural NPCs. Integrate Deep Simulation insights into the Dashboard. Polish the full UI.
@@ -683,3 +698,5 @@ When this document is updated by future Claude Code sessions, the version number
   - Eliminates ~80 MB writes on every state change at 1000-cast scale; project file now O(simulation count)
 
 **Version 1.5** — Phase 4 split into 4a and 4b documented. No code changes; planning capture only.
+
+**Version 1.6** — Phase 4b architectural shift: Tier 1 migrated from Ollama (local) to Claude Haiku 4.5 (API). Tighter Tier 1 classification (~5%). Ollama path preserved deprecated for future hybrid optimization.
