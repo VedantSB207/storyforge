@@ -17,14 +17,33 @@ import {
 
 // ── Health check + init ────────────────────────────────────────────────────
 // Returns { available, model, url }. Never throws.
+// Phase 4a.1: also does a 30s warmup generate call so the model is fully
+// loaded before the simulation's per-call 10s budget starts ticking. Without
+// this, cold-start model loads (~15s for 3B models, longer for 7B) cause
+// every Tier 1 call to time out and Ollama to start a fresh runner each
+// time — a death loop where the model is never warm.
 export async function initOllama({ url = OLLAMA_DEFAULT_URL, model = OLLAMA_DEFAULT_MODEL } = {}) {
   if (!hasIPC()) return { available: false, model, url, reason: 'no_electron' }
   try {
-    const res = await window.electronAPI.queryOllama({
+    const health = await window.electronAPI.queryOllama({
       url, model, prompt: null, healthCheck: true, timeout: OLLAMA_HEALTH_TIMEOUT_MS,
     })
-    if (res?.ok) return { available: true, model, url }
-    return { available: false, model, url, reason: res?.error || 'unreachable' }
+    if (!health?.ok) return { available: false, model, url, reason: health?.error || 'unreachable' }
+
+    // Warmup: a tiny generate call with a generous timeout. Loads the model
+    // into memory so subsequent simulation calls return fast.
+    const warmup = await window.electronAPI.queryOllama({
+      url, model,
+      prompt: 'Reply with only this JSON: {"action":"OBSERVE","reason":"warmup"}',
+      healthCheck: false,
+      timeout: 60000,
+    })
+    if (!warmup?.ok) {
+      // Model present but warmup failed — treat as unavailable so all Tier 1
+      // calls downgrade cleanly rather than each individual call timing out.
+      return { available: false, model, url, reason: `warmup_failed_${warmup?.error || 'unknown'}` }
+    }
+    return { available: true, model, url, warmupResponse: warmup.response }
   } catch (err) {
     return { available: false, model, url, reason: err.message }
   }

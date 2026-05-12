@@ -55,7 +55,10 @@ export const ACTIONS = Object.freeze({
   REST: {
     name: 'REST',
     eventCategory: 'rest',
-    preconditions: (agent) => agent.stress > 0.7 || agent.needs.physiological < 0.4,
+    // Phase 4a.1: REST = recovery action. Fires when stressed OR wounded.
+    // Doesn't overlap with EAT (which addresses physiological directly).
+    preconditions: (agent) =>
+      (agent.stress ?? 0) > 0.4 || (agent.health ?? 1) < 0.7,
     resolve: (agent) => {
       adjustNeed(agent, 'physiological', 0.15)
       agent.stress = clamp((agent.stress ?? 0) - 0.20)
@@ -75,6 +78,12 @@ export const ACTIONS = Object.freeze({
       for (const id of Object.keys(agent.bonds || {})) {
         const o = world.agentById?.[id]
         if (o && o.alive && o.region !== agent.region) return true
+      }
+      // Phase 4a.1: travel toward known agents elsewhere (curiosity /
+      // migration toward Knowledge of distant people)
+      for (const k of (agent.knownFacts || [])) {
+        const known = world.agentById?.[k.sourceAgentId]
+        if (known && known.alive && known.region && known.region !== agent.region) return true
       }
       return false
     },
@@ -225,19 +234,25 @@ export const ACTIONS = Object.freeze({
   BETRAY: {
     name: 'BETRAY',
     eventCategory: 'betrayal',
+    // Phase 4a.1: loosened from the previous triple-gated check. Two paths:
+    //   1. Standard opportunism — moderate-trust bond + incentive
+    //   2. Revenge — trust collapsed below -0.2 + at least one known fact
+    //      (knowledge advantage proxy)
+    // Both still require the target to be alive and co-located.
     preconditions: (agent, world) => {
       const bonds = agent.bonds || {}
       for (const id of Object.keys(bonds)) {
         const b = bonds[id]
-        // Need a bond with positive trust to betray, plus a self-interested
-        // streak (low values overlap = high-paranoia trait OR low purpose need)
-        if (b.intensity > 0.40 && b.trust > 0.20) {
-          const trustyEnough = b.trust > 0.40
-          const incentive = (agent.needs.esteem < 0.4) || (agent.needs.physiological < 0.3)
-          if (trustyEnough && incentive) {
-            const o = world.agentById?.[id]
-            if (o && o.alive && inSameRegion(o, agent)) return true
-          }
+        const o = world.agentById?.[id]
+        if (!o || !o.alive || !inSameRegion(o, agent)) continue
+        // Path 1: standard opportunism
+        if (b.intensity > 0.30 && b.trust > 0.20) {
+          const incentive = (agent.needs.esteem < 0.5) || (agent.needs.physiological < 0.4)
+          if (incentive) return true
+        }
+        // Path 2: revenge — trust shattered + knowledge advantage
+        if (b.intensity > 0.30 && b.trust < -0.20 && (agent.knownFacts || []).length > 0) {
+          return true
         }
       }
       return false
@@ -245,11 +260,15 @@ export const ACTIONS = Object.freeze({
     resolve: (agent, _t, world, rng) => {
       const bonds = agent.bonds || {}
       let target = null
+      // Match the same two paths as preconditions
       for (const id of Object.keys(bonds)) {
         const b = bonds[id]
-        if (b.intensity > 0.40 && b.trust > 0.40) {
-          const o = world.agentById?.[id]
-          if (o && o.alive && inSameRegion(o, agent)) { target = o; break }
+        const o = world.agentById?.[id]
+        if (!o || !o.alive || !inSameRegion(o, agent)) continue
+        if ((b.intensity > 0.30 && b.trust > 0.20) ||
+            (b.intensity > 0.30 && b.trust < -0.20 && (agent.knownFacts || []).length > 0)) {
+          target = o
+          break
         }
       }
       if (!target) return { success: false, events: [] }

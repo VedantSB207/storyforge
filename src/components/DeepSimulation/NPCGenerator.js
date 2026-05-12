@@ -2,8 +2,12 @@
 // Produces procedural agents matching the eight-layer schema with
 // dice-rolled values within ranges. No LLM calls.
 
-import { genId } from '../../constants.js'
 import { GENERIC_VALUES, GENERIC_FEARS } from './deepSimSchema.js'
+
+// Phase 4a.1: deterministic 6-char base36 id using the seeded rng so two
+// runs with the same seed produce byte-identical agent IDs. Previously
+// used Math.random via genId, which broke census determinism.
+const rngId = (rng) => Math.floor(rng() * 0x7fffffff).toString(36).padStart(6, '0')
 
 // Random helpers (deterministic if you pass a seeded rng)
 const between = (rng, lo, hi) => lo + (hi - lo) * rng()
@@ -49,7 +53,7 @@ export function createProceduralAgent({ genreId, kindTemplate, rng = Math.random
   const lifespan = Math.max(1, kindTemplate.typicalLifeExpectancy * jitter(rng, 0.2))
   return {
     // Layer 1 — Identity
-    id:        `npc_${genId()}`,
+    id:        `npc_${rngId(rng)}`,
     name:      generateName(genreId, kindTemplate, rng),
     source:    'procedural',
     bibleId:   null,

@@ -15,8 +15,9 @@ import {
   TAXONOMY_MODEL as DEFAULT_MODEL,
 } from './deepSimSchema.js'
 
-// Need weights — physiological/safety dominate decision pressure, others trail
-const NEED_WEIGHTS = { physiological: 1.0, safety: 0.9, belonging: 0.5, esteem: 0.4, purpose: 0.3 }
+// Need weights. Phase 4a.1: gentle rebalance — survival needs still
+// dominate, but social/identity needs aren't completely shadowed.
+const NEED_WEIGHTS = { physiological: 1.0, safety: 0.9, belonging: 0.6, esteem: 0.45, purpose: 0.4 }
 
 // Heuristic weights per action that map to which need it most addresses
 const ACTION_WEIGHTS = {
@@ -74,6 +75,30 @@ export function scoreActionsDeterministic(agent, available, world, rng) {
     if (name === 'FLEE' && (agent.fears || []).length > 0) score += 0.1
     if (name === 'OBSERVE' && (agent.values || []).includes('truth')) score += 0.15
     if (name === 'CONFLICT' && (agent.cognitiveDisposition?.socialSolitary ?? 0) < -0.3) score += 0.15
+
+    // ── Phase 4a.1: context-aware bumps ──
+    if (name === 'COMMUNICATE' && agent.needs.belonging < 0.5) {
+      const hasBondedHere = Object.entries(agent.bonds || {}).some(([id]) => {
+        const o = world.agentById?.[id]
+        return o?.alive && o.region === agent.region
+      })
+      if (hasBondedHere) score += 0.32
+    }
+    if (name === 'SEEK_BOND' && agent.needs.belonging < 0.5) score += 0.28
+    if (name === 'REST'      && (agent.stress ?? 0) > 0.5)     score += 0.30
+    if (name === 'BETRAY'    && agent.needs.esteem < 0.4)      score += 0.30
+    if (name === 'TRAVEL') {
+      const hasKnowledgeElsewhere = (agent.knownFacts || []).some(k => {
+        const o = world.agentById?.[k.sourceAgentId]
+        return o?.alive && o.region && o.region !== agent.region
+      })
+      if (hasKnowledgeElsewhere) score += 0.18
+    }
+    if (name === 'OBSERVE') {
+      // Random baseline; occasional win when nothing pressing
+      score += rng() * 0.30
+    }
+
     // Tiny jitter — stays tiny so a strong dominant action still wins reliably
     score += rng() * 0.05
     scored.push({ action: name, score })

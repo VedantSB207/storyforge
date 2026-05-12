@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { C, genId } from '../../constants.js'
 import { TIME_UNITS, CENSUS_MULTIPLIER } from './deepSimSchema.js'
-import { runSimulationRounds, buildSummary } from './SimulationRunner.js'
+import { runSimulationRounds, buildSummary, makeSeededRng } from './SimulationRunner.js'
 import { EventLog } from './EventLog.jsx'
 import { TaxonomyReview } from './TaxonomyReview.jsx'
 import { generateTaxonomy, fingerprintContent, estimateCostUSD } from './worldTaxonomy.js'
@@ -138,12 +138,19 @@ export function DeepSimulation({
     setRound(0)
     setFinalSnapshot(null)
 
-    // Build census + active cast from taxonomy
+    // Phase 4a.1: compute seed BEFORE buildCensus so the census uses a
+    // seeded RNG. Without this, the cast composition (which procedural
+    // NPCs are sampled, region assignments, initial needs) is non-
+    // deterministic even when the round-loop seed is fixed.
+    const seed = hashSeed(`${project?.id || 'noproj'}|${castSize}|${roundCount}|${timeUnit}|${Date.now()}`)
+
+    // Build census + active cast from taxonomy (deterministic given seed)
     const built = buildCensus({
       chars,
       taxonomy,
       castSize,
       censusMultiplier: CENSUS_MULTIPLIER,
+      rng: makeSeededRng(seed),
     })
     setAgentsLive(built.activeCast)
     setCensusStats(built.stats)
@@ -154,9 +161,6 @@ export function DeepSimulation({
                      : 1
 
     let lastSnap = null
-    // Phase 3: deterministic seed so the same simulation reproduces. Derived
-    // from project id + cast/round params; user can re-run to get same result.
-    const seed = hashSeed(`${project?.id || 'noproj'}|${castSize}|${roundCount}|${timeUnit}|${Date.now()}`)
     try {
       const gen = runSimulationRounds({
         initialAgents: built.activeCast,
