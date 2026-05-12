@@ -7,6 +7,8 @@ import { TaxonomyReview } from './TaxonomyReview.jsx'
 import { generateTaxonomy, fingerprintContent, estimateCostUSD } from './worldTaxonomy.js'
 import { buildCensus } from './CensusManager.js'
 import { generateNarrativeSummary, estimateNarrativeCostUSD } from './narrativeSummary.js'
+import { runScenario, buildVariantComparison } from './scenarioRunner.js'
+import { generateScenarioComparison } from './scenarioComparison.js'
 import {
   saveSimResult,
   loadSimResult,
@@ -40,6 +42,11 @@ export function DeepSimulation({
   const [castSize, setCastSize]       = useState(200)
   const [roundCount, setRoundCount]   = useState(30)
   const [timeUnit, setTimeUnit]       = useState('year')
+  const [variantCount, setVariantCount] = useState(3)   // Phase 4b/4 — scenario only
+
+  // Scenario state (Phase 4b/4)
+  const [scenarioRecord, setScenarioRecord] = useState(null)
+  const [scenarioProgress, setScenarioProgress] = useState(null)
 
   // Taxonomy state
   const [taxonomy, setTaxonomy]               = useState(null)
@@ -278,6 +285,131 @@ export function DeepSimulation({
     setPaused(false)
   }
 
+  // ── Phase 4b/4: Scenario mode ─────────────────────────────────────────────
+  // Run N variants of the same starting world, each with a deterministic
+  // seed derived from a base seed + index. Generate comparison narrative.
+  // Each variant's full result is saved to its own per-sim file (Phase 3.5
+  // path); the Scenario record stores variant IDs + comparison.
+  const startScenarioRun = async () => {
+    if (!taxonomy || boundCount === 0) return
+    setStep('scenario_running')
+    setScenarioProgress({ phase: 'starting', variantIndex: 0, round: 0 })
+    setScenarioRecord(null)
+
+    const baseSeed = hashSeed(`${project?.id || 'noproj'}|${castSize}|${roundCount}|${timeUnit}|scenario|${Date.now()}`)
+    const wallStart = Date.now()
+
+    try {
+      const { variants } = await runScenario({
+        chars, lore, taxonomy,
+        castSize, roundCount, timeUnit,
+        censusMultiplier: CENSUS_MULTIPLIER,
+        baseSeed,
+        variantCount,
+        mode: 'sequential',
+        onProgress: ({ variantIndex, round, roundCount: rc }) =>
+          setScenarioProgress({ phase: 'simulating', variantIndex, round, roundCount: rc }),
+      })
+
+      // Generate per-variant narratives in parallel
+      setScenarioProgress({ phase: 'narrating', variantIndex: 0, round: 0 })
+      const narratives = await Promise.all(variants.map(v =>
+        generateNarrativeSummary({
+          simulationResult: {
+            summary:        v.summary,
+            events:         v.events,
+            agents:         v.agents,
+            butterflyStats: v.butterflyStats,
+            dialogues:      v.dialogues,
+          },
+          project, taxonomy, chars,
+          censusStats: v.censusStats,
+          roundCount, timeUnit,
+        }).catch(() => null)
+      ))
+      for (let i = 0; i < variants.length; i++) variants[i].narrative = narratives[i]
+
+      // Comparison
+      setScenarioProgress({ phase: 'comparing' })
+      const comparisonData = buildVariantComparison({ variants, chars })
+      const comparison = await generateScenarioComparison({ variants, comparisonData, project, taxonomy })
+
+      // Persist each variant + the scenario wrapper
+      const scenarioId = 'scn_' + genId()
+      const variantSimIds = []
+      if (project?.id && window.electronAPI?.saveDeepSimResult) {
+        for (const v of variants) {
+          const simId = 'var_' + scenarioId + '_' + v.variantIndex
+          variantSimIds.push(simId)
+          const full = {
+            id: simId, timestamp: new Date().toISOString(),
+            mode: 'scenario_variant',
+            castSize, roundCount, timeUnit,
+            seed: v.seed,
+            scenarioId, variantIndex: v.variantIndex,
+            taxonomy, censusStats: v.censusStats,
+            agents: v.agents, events: v.events,
+            butterflyStats: v.butterflyStats,
+            tierCounters: v.tierCounters,
+            dialogues: v.dialogues,
+            narrative: v.narrative,
+            summary: `${v.summary.alive}/${v.summary.total} alive, ${v.summary.dead} died.`,
+          }
+          await window.electronAPI.saveDeepSimResult(project.id, simId, full)
+        }
+      }
+
+      const totalCost = (comparisonData.totalSimCost || 0) +
+        ((narratives.filter(Boolean)).reduce((s, n) => s + estimateNarrativeCostUSD(n.usage) || 0, 0) || 0) +
+        (comparison.cost || 0)
+      const totalWallTime = (Date.now() - wallStart) / 1000
+
+      const record = {
+        scenarioId,
+        timestamp: new Date().toISOString(),
+        mode: 'scenario',
+        baseConfig: { castSize, roundCount, timeUnit, variantCount, baseSeed },
+        variantCount,
+        variantSimIds,
+        comparisonData,
+        comparison,
+        totalCost,
+        totalWallTime,
+        summary: `${variantCount} variants × ${castSize} cast × ${roundCount} ${timeUnit}-rounds. ${comparisonData.fateDelta?.length || 0} bound chars had divergent fates across variants.`,
+      }
+
+      // Persist scenario record
+      if (project?.id && window.electronAPI?.saveScenarioResult) {
+        await window.electronAPI.saveScenarioResult(project.id, scenarioId, record)
+      }
+
+      // Push lightweight stub to project history
+      const stub = {
+        simId: scenarioId,
+        timestamp: record.timestamp,
+        mode: 'scenario',
+        castSize, roundCount, timeUnit,
+        seed: baseSeed,
+        summary: record.summary,
+        narrativeHeadline: comparison.themes?.[0] || (variantSimIds.length + ' variants compared'),
+        alive: null, dead: null,
+        totalEvents: null,
+        totalCost,
+        scenarioVariantCount: variantCount,
+      }
+      if (setDeepSimulationHistory) {
+        setDeepSimulationHistory(prev => [stub, ...(prev || [])])
+      }
+
+      setScenarioRecord({ ...record, variants })
+      setStep('scenario_results')
+    } catch (err) {
+      console.error('[Scenario] failed:', err)
+      setScenarioProgress({ phase: 'error', error: err.message || String(err) })
+      setStep('setup')
+    }
+  }
+
   const newSimulation = () => {
     setStep('setup')
     setLiveEvents([])
@@ -289,6 +421,8 @@ export function DeepSimulation({
     setNarrative(null)
     setNarrativeError('')
     setViewError('')
+    setScenarioRecord(null)
+    setScenarioProgress(null)
   }
 
   // Phase 3.5 — load a past simulation's full result from disk and render
@@ -352,7 +486,7 @@ export function DeepSimulation({
         <Section label="Simulation Mode">
           <div style={{ display: 'flex', gap: 8 }}>
             <ModeButton active={mode === 'progressive'} onClick={() => setMode('progressive')} label="Progressive" sub="Forward-moving timeline. State accumulates across rounds." />
-            <ModeButton active={false} disabled label="Scenario" sub="Branching variants from a fixed moment." badge="Phase 4" />
+            <ModeButton active={mode === 'scenario'}    onClick={() => setMode('scenario')}    label="Scenario"    sub="N parallel variants from the same starting moment, with comparison." />
           </div>
         </Section>
 
@@ -435,8 +569,28 @@ export function DeepSimulation({
           )}
         </Section>
 
+        {mode === 'scenario' && (
+          <Section label={`Variant Count — ${variantCount}`}>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {[2, 3, 4, 5].map(n => (
+                <button key={n} onClick={() => setVariantCount(n)}
+                  style={{
+                    padding: '6px 14px',
+                    backgroundColor: variantCount === n ? C.purple : C.bgCard,
+                    color: variantCount === n ? '#fff' : C.muted,
+                    border: `1px solid ${variantCount === n ? C.purple : C.border}`,
+                    borderRadius: 4, fontSize: 11, cursor: 'pointer', fontFamily: 'system-ui',
+                  }}>{n}</button>
+              ))}
+            </div>
+            <div style={{ marginTop: 8, fontSize: 10, color: C.muted, fontFamily: 'system-ui', fontStyle: 'italic' }}>
+              {variantCount} parallel chronicles of the same starting world. Each variant runs sequentially; total wall time ≈ {variantCount}× Progressive.
+            </div>
+          </Section>
+        )}
+
         <button
-          onClick={startRun}
+          onClick={mode === 'scenario' ? startScenarioRun : startRun}
           disabled={boundCount === 0 || !taxonomy}
           style={{
             width: '100%', padding: 13,
@@ -450,7 +604,9 @@ export function DeepSimulation({
             ? 'Add Story Bible characters first'
             : !taxonomy
               ? 'Generate world taxonomy first'
-              : 'Run Simulation →'}
+              : mode === 'scenario'
+                ? `Run ${variantCount}-variant Scenario →`
+                : 'Run Simulation →'}
         </button>
 
         {(deepSimulationHistory || []).length > 0 && (
@@ -574,6 +730,34 @@ export function DeepSimulation({
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       </div>
     )
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SCENARIO RUNNING (Phase 4b/4)
+  // ─────────────────────────────────────────────────────────────────────────
+  if (step === 'scenario_running') {
+    const p = scenarioProgress || {}
+    return (
+      <div style={{ padding: 48, maxWidth: 620, margin: '0 auto', textAlign: 'center', fontFamily: 'Georgia,serif' }}>
+        <div style={{ fontSize: 16, color: C.purpleLight, marginBottom: 6 }}>Scenario Running</div>
+        <div style={{ fontSize: 11, color: C.muted, fontFamily: 'system-ui', marginBottom: 24 }}>
+          {p.phase === 'simulating' ? `Variant ${(p.variantIndex ?? 0) + 1} of ${variantCount} — round ${p.round || 0} of ${p.roundCount || roundCount}`
+            : p.phase === 'narrating' ? 'Generating per-variant chronicles…'
+            : p.phase === 'comparing' ? 'Synthesising cross-variant comparison…'
+            : p.phase === 'starting'  ? 'Initialising variants…'
+            : 'Working…'}
+        </div>
+        <div style={{ display: 'inline-block', width: 28, height: 28, border: `2px solid ${C.purple}33`, borderTopColor: C.purpleLight, borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    )
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SCENARIO RESULTS (Phase 4b/4)
+  // ─────────────────────────────────────────────────────────────────────────
+  if (step === 'scenario_results' && scenarioRecord) {
+    return <ScenarioResultsScreen record={scenarioRecord} onNewSimulation={newSimulation}/>
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -720,6 +904,114 @@ function ResultsScreen({ project, summary, narrative, narrativeError, fullEvents
           <EventLog events={fullEvents} emptyText="No events fired during this run." />
         </div>
       </CollapsibleSection>
+    </div>
+  )
+}
+
+// ─── Phase 4b/4: Scenario Results — comparison + per-variant tabs ──────────
+function ScenarioResultsScreen({ record, onNewSimulation }) {
+  const [activeTab, setActiveTab] = useState(-1)   // -1 = Comparison view
+  const variants = record.variants || []
+  const comparison = record.comparison || {}
+
+  return (
+    <div style={{ padding: 24, maxWidth: 900, margin: '0 auto', fontFamily: 'Georgia,serif' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 }}>
+        <div>
+          <div style={{ fontSize: 15, color: C.purpleLight, fontWeight: 500 }}>Scenario Complete — {record.variantCount} variants</div>
+          <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', marginTop: 2 }}>
+            {record.baseConfig.castSize} cast · {record.baseConfig.roundCount} {record.baseConfig.timeUnit}-rounds · ${record.totalCost.toFixed(4)} total · {(record.totalWallTime/60).toFixed(1)} min wall
+          </div>
+        </div>
+        <button onClick={onNewSimulation} style={btnSecondary}>New Simulation</button>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 12, borderBottom: `1px solid ${C.border}` }}>
+        <button onClick={() => setActiveTab(-1)} style={tabStyle(activeTab === -1)}>Comparison</button>
+        {variants.map((v, i) => (
+          <button key={i} onClick={() => setActiveTab(i)} style={tabStyle(activeTab === i)}>
+            Variant {i + 1}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === -1 ? (
+        <ScenarioComparisonPanel record={record} />
+      ) : (
+        <VariantPanel variant={variants[activeTab]} fullEvents={variants[activeTab]?.events || []} />
+      )}
+    </div>
+  )
+}
+
+function tabStyle(active) {
+  return {
+    padding: '8px 14px',
+    backgroundColor: active ? C.bgCard : 'transparent',
+    color: active ? C.purpleLight : C.muted,
+    border: 'none',
+    borderBottom: active ? `2px solid ${C.purple}` : '2px solid transparent',
+    borderRadius: '4px 4px 0 0',
+    fontSize: 12,
+    cursor: 'pointer',
+    fontFamily: 'system-ui',
+    marginBottom: -1,
+  }
+}
+
+function ScenarioComparisonPanel({ record }) {
+  const c = record.comparison || {}
+  const data = record.comparisonData || {}
+  return (
+    <div>
+      <div style={{ backgroundColor: C.bgCard, border: `1px solid ${C.purple}55`, borderRadius: 8, padding: '20px 24px', marginBottom: 14 }}>
+        <div style={{ fontSize: 10, color: C.purple, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 10 }}>Cross-Variant Comparison</div>
+        <div style={{ fontSize: 14, color: C.parch, fontFamily: 'Georgia, serif', lineHeight: 1.7 }}>
+          {(c.comparison || '').split(/\n\n+/).map((p, i) => <p key={i} style={{ margin: i === 0 ? '0 0 12px' : '12px 0' }}>{p}</p>)}
+        </div>
+        {c.themes?.length > 0 && (
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>Themes</div>
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {c.themes.map((t, i) => <li key={i} style={{ fontSize: 12, color: C.mutedLight, fontFamily: 'Georgia, serif', fontStyle: 'italic', marginBottom: 3 }}>{t}</li>)}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {data.fateDelta?.length > 0 && (
+        <div style={{ backgroundColor: C.bgCard, border: `1px solid ${C.gold}33`, borderRadius: 6, padding: '14px 18px' }}>
+          <div style={{ fontSize: 10, color: C.gold, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: 10 }}>Divergent Fates</div>
+          {data.fateDelta.map((f, i) => (
+            <div key={i} style={{ fontSize: 12, color: C.parch, fontFamily: 'system-ui', marginBottom: 4 }}>
+              <strong>{f.name}</strong>: alive in variants {f.aliveInVariants.map(n => n + 1).join(', ')}; died in variants {f.deadInVariants.map(n => n + 1).join(', ')}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function VariantPanel({ variant, fullEvents }) {
+  const summary = variant?.summary
+  const n = variant?.narrative
+  return (
+    <div>
+      <div style={{ backgroundColor: C.bgCard, border: `1px solid ${C.purple}55`, borderRadius: 8, padding: '20px 24px', marginBottom: 14, maxWidth: 720, marginLeft: 'auto', marginRight: 'auto' }}>
+        <div style={{ fontSize: 10, color: C.purple, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 10 }}>Variant {(variant?.variantIndex ?? 0) + 1} · {summary?.alive}/{summary?.total} alive</div>
+        {n?.headline && (
+          <div style={{ fontSize: 16, color: C.parch, fontStyle: 'italic', fontFamily: 'Georgia, serif', marginBottom: 14, lineHeight: 1.4 }}>
+            &ldquo;{n.headline}&rdquo;
+          </div>
+        )}
+        {n?.narrative && (
+          <div style={{ fontSize: 14, color: C.parch, fontFamily: 'Georgia, serif', lineHeight: 1.7 }}>
+            {n.narrative.split(/\n\n+/).map((p, i) => <p key={i} style={{ margin: i === 0 ? '0 0 12px' : '12px 0' }}>{p}</p>)}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

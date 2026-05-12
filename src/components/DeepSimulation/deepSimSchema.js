@@ -229,6 +229,20 @@ export const DECISION_SCHEMA = Object.freeze({
   usage:     '{ input_tokens, output_tokens } | null',
 })
 
+// Phase 4b/4 — Scenario record shape (cross-variant wrapper)
+export const SCENARIO_SCHEMA = Object.freeze({
+  scenarioId:    'string',
+  timestamp:     'ISO string',
+  mode:          "'scenario'",
+  baseConfig:    '{ castSize, roundCount, timeUnit, variantCount, baseSeed }',
+  variantCount:  'number',
+  variantSimIds: 'string[] (per-variant simIds, each saved as its own deep-sim file)',
+  comparison:    '{ comparison, themes, usage, cost }',
+  totalCost:     'number USD',
+  totalWallTime: 'number seconds',
+  summary:       'string',
+})
+
 // Phase 4b/3 — Dialogue scene shape (one Sonnet call per scene).
 export const DIALOGUE_SCHEMA = Object.freeze({
   id:             'string (dlg_<n>)',

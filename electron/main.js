@@ -305,6 +305,46 @@ ipcMain.handle('delete-deep-sim-result', (_, { projectId, simId }) => {
   }
 })
 
+// ── Phase 4b/4 — Scenario wrapper persistence ────────────────────────────
+// Scenario records are small (metadata + comparison + variant ID refs);
+// each variant's full result is saved via save-deep-sim-result.
+ipcMain.handle('save-scenario-result', (_, { projectId, scenarioId, scenarioRecord }) => {
+  try {
+    const dir = getDeepSimDir(projectId)
+    const filePath = path.join(dir, `${scenarioId}.scenario.json`)
+    fs.writeFileSync(filePath, JSON.stringify(scenarioRecord, null, 2), 'utf8')
+    return { ok: true, path: filePath, size: fs.statSync(filePath).size }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
+ipcMain.handle('load-scenario-result', (_, { projectId, scenarioId }) => {
+  try {
+    const filePath = path.join(projectsDir, projectId, 'deep-sims', `${scenarioId}.scenario.json`)
+    if (!fs.existsSync(filePath)) return { ok: false, error: 'not_found' }
+    return { ok: true, scenarioRecord: JSON.parse(fs.readFileSync(filePath, 'utf8')) }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
+ipcMain.handle('list-scenario-results', (_, projectId) => {
+  try {
+    const dir = path.join(projectsDir, projectId, 'deep-sims')
+    if (!fs.existsSync(dir)) return { ok: true, files: [] }
+    const files = fs.readdirSync(dir)
+      .filter(f => f.endsWith('.scenario.json'))
+      .map(f => {
+        const stats = fs.statSync(path.join(dir, f))
+        return { scenarioId: f.replace(/\.scenario\.json$/, ''), size: stats.size, mtime: stats.mtime.toISOString() }
+      })
+    return { ok: true, files }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
 // ── IPC: Project File Library ────────────────────────────────────────────────
 const getLibraryDir = (projectId) => {
   const dir = path.join(projectsDir, projectId, 'library')

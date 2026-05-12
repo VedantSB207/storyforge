@@ -41,6 +41,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listDeepSimResults:  (projectId)                       => ipcRenderer.invoke('list-deep-sim-results',  projectId),
   deleteDeepSimResult: (projectId, simId)                => ipcRenderer.invoke('delete-deep-sim-result', { projectId, simId }),
 
+  // ── Phase 4b/4 — Scenario persistence ────────────────────────────────────
+  saveScenarioResult:  (projectId, scenarioId, scenarioRecord) => ipcRenderer.invoke('save-scenario-result',  { projectId, scenarioId, scenarioRecord }),
+  loadScenarioResult:  (projectId, scenarioId)                 => ipcRenderer.invoke('load-scenario-result',  { projectId, scenarioId }),
+  listScenarioResults: (projectId)                             => ipcRenderer.invoke('list-scenario-results', projectId),
+
   // ── Ollama (Phase 4a) ────────────────────────────────────────────────────
   queryOllama:        (params)                           => ipcRenderer.invoke('query-ollama', params),
 
