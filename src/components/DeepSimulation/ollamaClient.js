@@ -1,3 +1,9 @@
+// DEPRECATED in v1.6 — Tier 1 migrated to Claude Haiku 4.5 (see haikuClient.js
+// and SIMULATION_ENGINE_DESIGN.md v1.6 changelog). This module is preserved
+// for potential future hybrid optimization (Path C: Ollama fast-path with
+// Haiku fallback on parse failure or latency budget exceeded). No active
+// import path uses it in Phase 4b.
+//
 // Phase 4a — Ollama client with graceful degradation
 //
 // Health check at simulation start. If unreachable, set ollamaState.available

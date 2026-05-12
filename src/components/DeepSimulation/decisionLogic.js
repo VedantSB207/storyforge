@@ -7,10 +7,11 @@
 // All RNG goes through the seeded rng so determinism holds end-to-end.
 
 import { ACTIONS, ACTION_NAMES, availableActions } from './actions.js'
-import { decideViaOllama } from './ollamaClient.js'
+import { decideViaHaiku, decideBatchViaHaiku } from './haikuClient.js'
 import { callClaude } from '../../api.js'
 import {
   MAX_TIER1_PER_ROUND,
+  MAX_TIER1_PER_SIM,
   MAX_TIER2_PER_SIM,
   TAXONOMY_MODEL as DEFAULT_MODEL,
 } from './deepSimSchema.js'
@@ -107,46 +108,51 @@ export function scoreActionsDeterministic(agent, available, world, rng) {
   return scored
 }
 
-// ── Tier classification ────────────────────────────────────────────────────
-// Tier 2 if bound char AND a plot-critical signal is present.
-// Tier 0 if pressure is overwhelming on a single need AND a clear action satisfies it.
-// Tier 1 otherwise.
-export function classifyTier(agent, available, world) {
-  const pressure = computePressure(agent)
-  const dom = dominantNeed(pressure)
+// ── Tier classification (Phase 4b: tightened to ~5% Tier 1) ────────────────
+// Tier 2 = bound char in plot-critical moment OR genuinely high-stakes ambiguity
+// Tier 1 = tiebreaker when top two deterministic scores are close AND there's
+//          genuine narrative material (recent significant event)
+// Tier 0 = default — covers ~95% of agent-rounds
+export function classifyTier(agent, available, world, scored) {
   const isBound = agent.source === 'bound'
 
-  // Tier 2 signals (bound char + plot-critical)
-  if (isBound) {
-    // Plot-critical action available?
-    if (available.includes('BETRAY') || available.includes('CONFLICT')) return 'tier2'
-    // Recent high-confidence Knowledge of significance?
-    const recent = (agent.knownFacts || []).filter(k =>
-      k.confidence > 0.8 && (world.round - k.roundLearned) <= 3
-    )
-    if (recent.some(k => /betrayal|died|fled/i.test(k.content))) return 'tier2'
-    // Pressure conflict — multiple needs above 0.5 pressure simultaneously
-    const highPressureNeeds = Object.values(pressure).filter(p => p > 0.5).length
-    if (highPressureNeeds >= 2) return 'tier2'
-  }
+  // Recent significant event (used for both Tier 2 and Tier 1 gating).
+  // Narrowed in Phase 4b to deaths/betrayals only — the broader regex
+  // (including cooperation / conflict) was catching every agent every
+  // round and pushing Tier 1 to 45%. We want ~5%.
+  const recentSignificant = (agent.knownFacts || []).filter(k =>
+    k.confidence > 0.6 && (world.round - k.roundLearned) <= 3
+       && /betrayal|died/i.test(k.content)
+  )
+  const hasHighStakesKnowledge = recentSignificant.length > 0
 
-  // Tier 0 if pressure is concentrated and dominant need has an obvious action
-  if (dom.value > 0.7 && totalPressure(pressure) - dom.value < 0.5) {
-    // Do we have an action that strongly maps to that need?
-    const w = ACTION_WEIGHTS
-    const strongMatches = available.filter(a => (w[a]?.[dom.key] ?? 0) > 0.6)
-    if (strongMatches.length > 0) return 'tier0'
-  }
+  // Score-derived helpers
+  const top   = scored?.[0]?.score ?? 0
+  const next  = scored?.[1]?.score ?? 0
+  const within10 = top > 0 && (top - next) / top < 0.10
+  const within20 = top > 0 && (top - next) / top < 0.20
 
-  // Otherwise Tier 1 if procedural; bound chars without plot-critical fall to Tier 1
-  return 'tier1'
+  // ── Tier 2 — bound char in plot-critical moment ──
+  if (isBound && (
+    hasHighStakesKnowledge ||
+    available.includes('BETRAY') ||
+    within10
+  )) return 'tier2'
+
+  // ── Tier 1 — genuinely ambiguous tiebreaker ──
+  if (within20 && available.length >= 3 && hasHighStakesKnowledge) return 'tier1'
+
+  // ── Tier 0 — default ──
+  return 'tier0'
 }
 
-// ── Tier 1: Ollama ─────────────────────────────────────────────────────────
-async function decideViaOllamaWrapper(agent, available, world, ollamaState) {
-  const res = await decideViaOllama(agent, available, world, ollamaState)
+// ── Tier 1: Haiku 4.5 (Phase 4b) ────────────────────────────────────────────
+// Direct call kept for fallback / non-batched paths. Batched route is in
+// decideRoundBatched below.
+async function decideViaHaikuWrapper(agent, available, world) {
+  const res = await decideViaHaiku(agent, available, world)
   if (!res || !available.includes(res.action)) return null
-  return { action: res.action, reason: res.reason || 'ollama' }
+  return res
 }
 
 // ── Tier 2: Claude ─────────────────────────────────────────────────────────
@@ -195,34 +201,40 @@ async function decideViaClaude(agent, available, world) {
   return { action: parsed.action, reason: parsed.reason || 'claude', usage: res.usage }
 }
 
-// ── Public: decideAction ───────────────────────────────────────────────────
+// ── Public: decideAction (single-agent, used by runner for Tier 0 + Tier 2) ──
 // Returns { action, tier, reasoning, usage? }.
-export async function decideAction({ agent, world, rng, ollamaState, callCounters }) {
+// Phase 4b: pre-scores deterministically so classifyTier can use the
+// top-two-within-X% test. Tier 1 calls go through decideRoundBatched, NOT
+// this function — but if a caller bypasses batching, single-call Tier 1
+// still works via decideViaHaikuWrapper.
+export async function decideAction({ agent, world, rng, callCounters }) {
   const available = availableActions(agent, world)
   if (available.length === 0) return { action: 'OBSERVE', tier: 'tier0', reasoning: 'no_actions_available' }
 
-  let tier = classifyTier(agent, available, world)
+  // Pre-score for tier classification
+  const scored = scoreActionsDeterministic(agent, available, world, rng)
+  let tier = classifyTier(agent, available, world, scored)
 
   // Cap-driven downgrades
   if (tier === 'tier2' && callCounters.tier2Total >= MAX_TIER2_PER_SIM) tier = 'tier1'
-  if (tier === 'tier1' && callCounters.tier1ThisRound >= MAX_TIER1_PER_ROUND) tier = 'tier0'
+  if (tier === 'tier1' && (
+    callCounters.tier1ThisRound >= MAX_TIER1_PER_ROUND ||
+    callCounters.tier1Total >= MAX_TIER1_PER_SIM
+  )) tier = 'tier0'
 
-  // Ollama unreachable forces all Tier 1 → Tier 0
-  if (tier === 'tier1' && !ollamaState?.available) tier = 'tier0'
-
-  // Resolve
   if (tier === 'tier0') {
-    const scored = scoreActionsDeterministic(agent, available, world, rng)
-    return { action: scored[0].action, tier: 'tier0', reasoning: 'deterministic_top_score' }
+    return { action: scored[0].action, tier: 'tier0', reasoning: 'deterministic_top_score', _scored: scored }
   }
 
   if (tier === 'tier1') {
     callCounters.tier1ThisRound += 1
-    const res = await decideViaOllamaWrapper(agent, available, world, ollamaState)
-    if (res) return { action: res.action, tier: 'tier1', reasoning: res.reason }
-    // fall through to deterministic
-    const scored = scoreActionsDeterministic(agent, available, world, rng)
-    return { action: scored[0].action, tier: 'tier0', reasoning: 'tier1_fallback' }
+    callCounters.tier1Total += 1
+    const res = await decideViaHaikuWrapper(agent, available, world)
+    if (res?.action) {
+      if (res.usage) callCounters.tier1Usage.push(res.usage)
+      return { action: res.action, tier: 'tier1', reasoning: res.reason, usage: res.usage }
+    }
+    return { action: scored[0].action, tier: 'tier0', reasoning: 'tier1_fallback', _scored: scored }
   }
 
   if (tier === 'tier2') {
@@ -233,13 +245,89 @@ export async function decideAction({ agent, world, rng, ollamaState, callCounter
       return { action: res.action, tier: 'tier2', reasoning: res.reason, usage: res.usage }
     }
     callCounters.tier2Errors.push(res?.error || 'unknown')
-    const scored = scoreActionsDeterministic(agent, available, world, rng)
-    return { action: scored[0].action, tier: 'tier0', reasoning: 'tier2_fallback' }
+    return { action: scored[0].action, tier: 'tier0', reasoning: 'tier2_fallback', _scored: scored }
   }
 
-  // Defensive default
-  const scored = scoreActionsDeterministic(agent, available, world, rng)
-  return { action: scored[0].action, tier: 'tier0', reasoning: 'unknown_tier' }
+  return { action: scored[0].action, tier: 'tier0', reasoning: 'unknown_tier', _scored: scored }
+}
+
+// ── Phase 4b: per-round batched routing ────────────────────────────────────
+// SimulationRunner calls this once per round. Two passes:
+//   1) Classify everyone deterministically; resolve Tier 0 immediately
+//   2) Collect Tier 1 batch + Tier 2 batch; fire each batch in parallel
+// Returns map agent.id → { action, tier, reasoning, usage }
+export async function decideRoundBatched({ agents, world, rng, callCounters }) {
+  const decisions = {}
+  const tier1Batch = []
+  const tier2Batch = []
+  const scoredById = {}
+
+  // Pass 1: classify + resolve Tier 0
+  for (const agent of agents) {
+    if (!agent.alive) continue
+    const available = availableActions(agent, world)
+    if (available.length === 0) {
+      decisions[agent.id] = { action: 'OBSERVE', tier: 'tier0', reasoning: 'no_actions_available' }
+      continue
+    }
+    const scored = scoreActionsDeterministic(agent, available, world, rng)
+    scoredById[agent.id] = scored
+
+    let tier = classifyTier(agent, available, world, scored)
+    if (tier === 'tier2' && callCounters.tier2Total >= MAX_TIER2_PER_SIM) tier = 'tier1'
+    if (tier === 'tier1' && (
+      callCounters.tier1ThisRound >= MAX_TIER1_PER_ROUND ||
+      callCounters.tier1Total      >= MAX_TIER1_PER_SIM
+    )) tier = 'tier0'
+
+    if (tier === 'tier0') {
+      decisions[agent.id] = { action: scored[0].action, tier: 'tier0', reasoning: 'deterministic_top_score' }
+    } else if (tier === 'tier1') {
+      callCounters.tier1ThisRound += 1
+      callCounters.tier1Total      += 1
+      tier1Batch.push({ agent, available, world })
+    } else {
+      callCounters.tier2Total += 1
+      tier2Batch.push({ agent, available, world })
+    }
+  }
+
+  // Pass 2a: Tier 1 batch via Haiku (parallel, in chunks)
+  if (tier1Batch.length > 0) {
+    const results = await decideBatchViaHaiku(tier1Batch)
+    for (let i = 0; i < tier1Batch.length; i++) {
+      const { agent, available } = tier1Batch[i]
+      const r = results[i]
+      const scored = scoredById[agent.id]
+      if (r?.action && available.includes(r.action)) {
+        if (r.usage) callCounters.tier1Usage.push(r.usage)
+        decisions[agent.id] = { action: r.action, tier: 'tier1', reasoning: r.reason || 'haiku', usage: r.usage }
+      } else {
+        decisions[agent.id] = { action: scored[0].action, tier: 'tier0', reasoning: 'tier1_fallback' }
+      }
+    }
+  }
+
+  // Pass 2b: Tier 2 in parallel (Sonnet — kept sequential-batched via Promise.all)
+  if (tier2Batch.length > 0) {
+    const results = await Promise.all(
+      tier2Batch.map(d => decideViaClaude(d.agent, d.available, d.world))
+    )
+    for (let i = 0; i < tier2Batch.length; i++) {
+      const { agent, available } = tier2Batch[i]
+      const r = results[i]
+      const scored = scoredById[agent.id]
+      if (r?.action && available.includes(r.action)) {
+        if (r.usage) callCounters.tier2Usage.push(r.usage)
+        decisions[agent.id] = { action: r.action, tier: 'tier2', reasoning: r.reason || 'claude', usage: r.usage }
+      } else {
+        callCounters.tier2Errors.push(r?.error || 'unknown')
+        decisions[agent.id] = { action: scored[0].action, tier: 'tier0', reasoning: 'tier2_fallback' }
+      }
+    }
+  }
+
+  return decisions
 }
 
 export const _internal = {

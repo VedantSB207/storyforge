@@ -6,6 +6,12 @@
 // populate it. Bonds are NOT propagated through Knowledge: an agent always
 // knows their own bonds, even if the other party feels nothing back
 // (asymmetric: A loves B, B feels nothing — both states valid).
+//
+// Phase 4b: thresholds lowered for friendship/love/kinship promotion so
+// actual relationship arcs surface in 30-round runs instead of staying
+// uniformly "weak." Also: repeated cooperation between the same pair
+// (3+ in the last 10 rounds) gets a stronger intensity bump (+0.10 vs
+// +0.05). Implemented as a "recent-coop" check in updateBondFromEvent.
 
 import { BOND_DECAY_THRESHOLD_ROUNDS } from './deepSimSchema.js'
 
@@ -62,13 +68,14 @@ function maybePromoteType(bond, agent, other, currentRound) {
     return
   }
 
+  // Phase 4b thresholds lowered so friendships actually form in 30 rounds.
   // Promote weak → friendship after sustained cooperation
-  if (bond.type === 'weak' && bond.intensity > 0.3 && cooperateCount >= 2) {
+  if (bond.type === 'weak' && bond.intensity > 0.2 && cooperateCount >= 2) {
     bond.type = 'friendship'
     return
   }
-  // Friendship → love or kinship at high intensity
-  if (bond.type === 'friendship' && bond.intensity > 0.7 && bond.trust > 0.5) {
+  // Friendship → love or kinship at moderate-high intensity
+  if (bond.type === 'friendship' && bond.intensity > 0.4 && bond.trust > 0.3) {
     // Heuristic: if both share genre prefix → kinship; else love
     const sharedGenre = (agent?.genreTag || '').split(':')[0] === (other?.genreTag || '').split(':')[0]
     bond.type = sharedGenre ? 'kinship' : 'love'
@@ -91,8 +98,14 @@ export function updateBondFromEvent(agent, event, world) {
   const bBond = ensureBond(target, agent.id, round)
 
   if (cat === 'cooperation') {
-    applyDelta(aBond,  +0.05,  +0.05, 'cooperate', round)
-    applyDelta(bBond,  +0.05,  +0.05, 'cooperate', round)
+    // Phase 4b: count recent cooperations between this pair. If 3+ in the
+    // last 10 rounds, this is a sustained partnership — boost the bump.
+    const recentCoopA = aBond.history.filter(h =>
+      h.eventType === 'cooperate' && (round - h.round) <= 10
+    ).length
+    const bump = recentCoopA >= 3 ? 0.10 : 0.05
+    applyDelta(aBond,  +bump, +bump, 'cooperate', round)
+    applyDelta(bBond,  +bump, +bump, 'cooperate', round)
   } else if (cat === 'conflict') {
     const winnerId = event.winnerId, loserId = event.loserId
     if (agent.id === winnerId) {

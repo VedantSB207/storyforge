@@ -23,15 +23,12 @@ import { initialisePositions } from './positionGraph.js'
 import { tagExceptionalPerception } from './witnessRules.js'
 import { createTrace, traceStats } from './butterflyTrace.js'
 import { propagateRound, resetKidCounter } from './propagation.js'
-import { decideAction } from './decisionLogic.js'
+import { decideRoundBatched } from './decisionLogic.js'
 import { resolveAction } from './actions.js'
-import { initOllama } from './ollamaClient.js'
 import { applyCoWitnessBonus, updateBondFromEvent, decayBonds } from './bondsLayer.js'
 import {
   MAX_LLM_DISTORTION_CALLS_PER_ROUND,
   MAX_LLM_DISTORTION_CALLS_PER_SIM,
-  OLLAMA_DEFAULT_URL,
-  OLLAMA_DEFAULT_MODEL,
 } from './deepSimSchema.js'
 
 // Mulberry32 — small, fast, seeded PRNG. Same seed → same sequence.
@@ -58,10 +55,7 @@ export async function* runSimulationRounds({
   // Phase 3 LLM distortion caps
   maxLLMPerRound = MAX_LLM_DISTORTION_CALLS_PER_ROUND,
   maxLLMPerSim   = MAX_LLM_DISTORTION_CALLS_PER_SIM,
-  // Phase 4a Ollama config (optional — caller can override URL/model)
-  ollamaUrl   = OLLAMA_DEFAULT_URL,
-  ollamaModel = OLLAMA_DEFAULT_MODEL,
-  // Test-only: disable all LLM (Tier 2 decisions + Phase 3 distortion).
+  // Test-only: disable all LLM (Tier 1 + Tier 2 decisions + Phase 3 distortion).
   // With same seed, two runs will be byte-identical when this is on.
   disableLLM = false,
 }) {
@@ -73,12 +67,10 @@ export async function* runSimulationRounds({
     actionHistory: [],
   }))
 
-  // Init positions, exceptional perception, Ollama health (all once).
+  // Init positions, exceptional perception (Phase 4b: Tier 1 via Haiku
+  // doesn't need a warmup — no init step).
   const positionState = initialisePositions(agents, lore, chars, effectiveRng)
   tagExceptionalPerception(agents)
-  const ollamaState = disableLLM
-    ? { available: false, model: 'disabled', url: 'disabled', reason: 'disableLLM_flag' }
-    : await initOllama({ url: ollamaUrl, model: ollamaModel })
 
   // Build agent index for O(1) lookup
   const agentById = Object.create(null)
@@ -90,13 +82,14 @@ export async function* runSimulationRounds({
   let llmDistortionCallsTotal = 0
   const llmDistortionUsageAll = []
 
-  // Phase 4a tier counters. When disableLLM is set we pre-saturate the caps
-  // so every decision routes to Tier 0 deterministic.
+  // Tier counters. When disableLLM is set we pre-saturate the caps so every
+  // decision routes to Tier 0 deterministic (used for determinism testing).
   const tierCounters = {
     tier0Total: 0,
-    tier1Total: 0,
+    tier1Total: disableLLM ? 999999 : 0,
     tier2Total: disableLLM ? 999999 : 0,
     tier1ThisRound: 0,
+    tier1Usage: [],
     tier2Usage: [],
     tier2Errors: [],
   }
@@ -128,15 +121,24 @@ export async function* runSimulationRounds({
     // World object passed to action / decision logic
     const world = { round, agents, agentById, positionState }
 
-    // ── 3-4. Decide + resolve actions for living agents ────────────────
+    // ── 3-4. Decide + resolve actions for living agents (Phase 4b: batched) ──
     const actionEvents = []
+    // Batched per-round routing — Tier 0 sync, Tier 1 batched via Haiku
+    // parallel, Tier 2 parallel via Sonnet
+    const decisions = await decideRoundBatched({
+      agents,
+      world,
+      rng: effectiveRng,
+      callCounters: tierCounters,
+    })
     for (const agent of agents) {
       if (!agent.alive) continue
-      const decision = await decideAction({
-        agent, world, rng: effectiveRng, ollamaState,
-        callCounters: tierCounters,
-      })
-      tierCounters[decision.tier + 'Total'] = (tierCounters[decision.tier + 'Total'] || 0) + 1
+      const decision = decisions[agent.id]
+      if (!decision) continue
+      // tier0Total / tier1Total / tier2Total are already incremented inside
+      // decideRoundBatched by way of the callCounters argument — except for
+      // tier0 which doesn't pass through the LLM path; tally it here.
+      if (decision.tier === 'tier0') tierCounters.tier0Total++
       actionCounts[decision.action] = (actionCounts[decision.action] || 0) + 1
 
       const result = resolveAction(agent, decision.action, world, effectiveRng)
@@ -146,7 +148,6 @@ export async function* runSimulationRounds({
           actionEvents.push(e)
         }
       }
-      // Stash bond updates on a side-channel; they apply after propagation
       if (result?.bondUpdates) {
         agent._pendingBondUpdates = (agent._pendingBondUpdates || []).concat(result.bondUpdates)
       }
@@ -221,7 +222,6 @@ export async function* runSimulationRounds({
         llmCallsThisRound: propResult.llmCallsThisRound,
         tierCounters: { ...tierCounters },
         actionCounts: { ...actionCounts },
-        ollamaState,
         progress: round / roundCount,
       }
     }
@@ -241,7 +241,6 @@ export async function* runSimulationRounds({
     llmUsageAll: llmDistortionUsageAll,
     tierCounters: { ...tierCounters },
     actionCounts: { ...actionCounts },
-    ollamaState,
     progress: 1,
     final: true,
   }

@@ -194,8 +194,11 @@ export const DEEP_SIM_FULL_RESULT_SCHEMA = Object.freeze({
 // ─── Phase 4a additions: decisions, actions, Ollama, bonds ─────────────────
 
 // Three-tier decision routing caps.
-export const MAX_TIER1_PER_ROUND = 50    // Ollama calls per round
-export const MAX_TIER2_PER_SIM   = 80    // Claude decision calls per full sim
+// Phase 4b: Tier 1 caps tightened with classification narrowing. Tier 1
+// migrated from Ollama to Haiku 4.5 — see haikuClient.js.
+export const MAX_TIER1_PER_ROUND = 30    // Haiku decision calls per round (was 50)
+export const MAX_TIER1_PER_SIM   = 400   // Haiku decision calls per full sim
+export const MAX_TIER2_PER_SIM   = 80    // Claude (Sonnet) decision calls per full sim
 
 // Ollama defaults. URL is the local default; production deploys may point
 // at the user's VPS.
