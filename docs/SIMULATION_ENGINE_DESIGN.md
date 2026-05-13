@@ -1,7 +1,7 @@
 # StoryForge Deep Simulation Engine
 ## Implementation Design Document
 
-**Version 1.6**
+**Version 1.7**
 **Branch:** `deep-simulation-rebuild`
 **Document location in repo:** `docs/SIMULATION_ENGINE_DESIGN.md`
 
@@ -655,6 +655,13 @@ Build all eight Progressive mode output panels (plus the ninth if NDE is active)
 
 ---
 
+### Phase 5 split into Phase 5 and Phase 6
+
+The output experience layer is split into two phases for incremental verification:
+
+- **Phase 5 — Results experience core + spatial/causal visualizations.** The visible "world experience" — character threads, dialogue scene polish, map view, bond network, butterfly trace visualization. The headline payoff of the rebuild.
+- **Phase 6 — Insight panels, analytics, and polish.** Blind spot detection, promotion candidates, emotional weather, theme detection, real-time progress streaming, credit observability, scenario comparison UI polish.
+
 ### Output as world experience — North Star for Phase 5
 
 The output of a Deep Simulation run is not a chronicle. It is the writer experiencing their own world from above. A successful output makes the writer feel they have visited their own world and returned with:
@@ -700,3 +707,5 @@ When this document is updated by future Claude Code sessions, the version number
 **Version 1.5** — Phase 4 split into 4a and 4b documented. No code changes; planning capture only.
 
 **Version 1.6** — Phase 4b architectural shift: Tier 1 migrated from Ollama (local) to Claude Haiku 4.5 (API). Tighter Tier 1 classification (~5%). Ollama path preserved deprecated for future hybrid optimization.
+
+**Version 1.7** — Phase 5/6 split documented. Phase 5 = visible world experience. Phase 6 = analytical depth + polish.
