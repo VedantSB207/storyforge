@@ -79,6 +79,9 @@ export function DeepSimulation({
   const [knowledgeSeedingEnabled, setKnowledgeSeedingEnabled] = useState(true)
   const [confirmDisableSeeding, setConfirmDisableSeeding]     = useState(false)
   const [hydrationCostInfo, setHydrationCostInfo] = useState(null)
+  // Phase 6/6b — opt-in toggle for persisting the butterfly trace with each
+  // saved simulation. Off by default (trace can reach ~50MB at 1000 cast).
+  const [preserveCausation, setPreserveCausation] = useState(false)
 
   // Scenario state (Phase 4b/4)
   const [scenarioRecord, setScenarioRecord] = useState(null)
@@ -384,6 +387,7 @@ export function DeepSimulation({
 
     // Build the run entry. Phase 3.5: split into full (file on disk) +
     // metadata stub (lives in project's deepSimulationHistory[]).
+    // Phase 6/6b: butterflyTrace only goes to disk when preserveCausation is on.
     const simId = genId()
     const fullEntry = {
       id:         simId,
@@ -398,6 +402,8 @@ export function DeepSimulation({
       agents:     lastSnap.agents,
       events:     lastSnap.events,
       butterflyStats: lastSnap.butterflyStats,
+      butterflyTrace: preserveCausation ? lastSnap.butterflyTrace : null,
+      preserveCausation, // record the choice so the past-run viewer can show appropriate empty-state
       llmCallsTotal: lastSnap.llmCallsTotal,
       tierCounters:  lastSnap.tierCounters,
       dialogues:     lastSnap.dialogues || [],   // Phase 4b/3
@@ -506,10 +512,15 @@ export function DeepSimulation({
             taxonomy, censusStats: v.censusStats,
             agents: v.agents, events: v.events,
             butterflyStats: v.butterflyStats,
+            butterflyTrace: preserveCausation ? v.butterflyTrace : null,   // Phase 6/6b
+            preserveCausation,                                              // Phase 6/6b
             tierCounters: v.tierCounters,
             dialogues: v.dialogues,
             narrative: v.narrative,
             summary: `${v.summary.alive}/${v.summary.total} alive, ${v.summary.dead} died.`,
+            // Phase 6/6b: keep structured summary for past-run reload — the
+            // VariantPanel needs alive/dead/avgNeeds/avgAge to render its tabs.
+            summaryObject: v.summary,
           }
           await window.electronAPI.saveDeepSimResult(project.id, simId, full)
         }
@@ -585,11 +596,45 @@ export function DeepSimulation({
 
   // Phase 3.5 — load a past simulation's full result from disk and render
   // it on the results screen. Hydrates the same state vars a fresh run would.
+  // Phase 6/6b — scenarios load through a different IPC path and reconstruct
+  // each variant's full result for the per-variant tabs.
   const viewPastRun = async (stub) => {
     if (!project?.id) return
     setViewError('')
     setViewLoading(true)
     try {
+      // Branch: scenario stubs load the scenario record + each variant file
+      if (stub.mode === 'scenario' && window.electronAPI?.loadScenarioResult) {
+        const scenarioId = stub.simId || stub.id
+        const scenarioRes = await window.electronAPI.loadScenarioResult(project.id, scenarioId)
+        if (!scenarioRes?.ok) throw new Error(scenarioRes?.error || 'scenario load failed')
+        const scenarioRecord = scenarioRes.scenarioRecord || scenarioRes
+        const variantIds = scenarioRecord.variantSimIds || []
+        const variants = []
+        for (const vid of variantIds) {
+          const r = await loadSimResult(project.id, vid)
+          if (!r?.ok) continue
+          const f = r.fullResult
+          // Reconstruct the variant shape expected by VariantPanel
+          variants.push({
+            variantIndex:   f.variantIndex,
+            seed:           f.seed,
+            summary:        f.summaryObject || (f.summary && typeof f.summary === 'object' ? f.summary : buildSummary({ agents: f.agents || [], events: f.events || [] })),
+            agents:         f.agents || [],
+            events:         f.events || [],
+            butterflyTrace: f.butterflyTrace || null,
+            butterflyStats: f.butterflyStats || null,
+            tierCounters:   f.tierCounters,
+            dialogues:      f.dialogues || [],
+            censusStats:    f.censusStats || null,
+            narrative:      f.narrative || null,
+          })
+        }
+        setScenarioRecord({ ...scenarioRecord, variants })
+        setStep('scenario_results')
+        return
+      }
+
       const res = await loadSimResult(project.id, stub.simId || stub.id)
       if (!res?.ok) throw new Error(res?.error || 'load failed')
       const full = res.fullResult
@@ -765,6 +810,28 @@ export function DeepSimulation({
               </div>
             </label>
           </div>
+        </Section>
+
+        {/* Phase 6/6b — Causation data persistence toggle */}
+        <Section label="Causation data (Butterfly Trace)">
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', padding: '6px 0' }}>
+            <input type="checkbox" checked={preserveCausation}
+              onChange={e => setPreserveCausation(e.target.checked)}
+              style={{ marginTop: 3 }} />
+            <div>
+              <div style={{ fontSize: 12, color: preserveCausation ? C.parch : C.mutedLight, fontFamily: 'system-ui' }}>
+                Preserve causation data{' '}
+                <span style={{ fontSize: 10, color: C.muted, fontStyle: 'italic' }}>
+                  (saves the full butterfly trace — heavy: ~5 MB at 200 cast, ~50 MB at 1000 cast)
+                </span>
+              </div>
+              <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', fontStyle: 'italic', lineHeight: 1.5, marginTop: 2 }}>
+                {preserveCausation
+                  ? 'The Causation tab will be fully populated when you re-open this simulation. Trace data is written to disk with the run.'
+                  : 'The Causation tab is available during the run but not when viewing this simulation later. Recommended for most projects.'}
+              </div>
+            </div>
+          </label>
         </Section>
 
         {/* Phase 6/6a-i — Knowledge seeding toggle */}
@@ -1334,7 +1401,10 @@ function ScenarioResultsScreen({ record, onNewSimulation }) {
       {activeTab === -1 ? (
         <ScenarioComparisonPanel record={record} />
       ) : (
-        <VariantPanel variant={variants[activeTab]} fullEvents={variants[activeTab]?.events || []} />
+        <VariantPanel
+          variant={variants[activeTab]}
+          baseConfig={record.baseConfig}
+        />
       )}
     </div>
   )
@@ -1389,24 +1459,70 @@ function ScenarioComparisonPanel({ record }) {
   )
 }
 
-function VariantPanel({ variant, fullEvents }) {
-  const summary = variant?.summary
-  const n = variant?.narrative
+// Phase 6/6b — each variant now renders the full ResultsScreen tab set
+// (Chronicle / Characters / World / Bonds / Causation). The variant's
+// in-memory data is shaped into a simulationResult, then dispatched to
+// VariantResults which renders the same tabbed UI as a progressive run.
+function VariantPanel({ variant, baseConfig }) {
+  if (!variant) return null
+  const simulationResult = {
+    agents:         variant.agents || [],
+    events:         variant.events || [],
+    dialogues:      variant.dialogues || [],
+    butterflyTrace: variant.butterflyTrace || null,
+    butterflyStats: variant.butterflyStats || null,
+    summary:        variant.summary,
+    roundCount:     baseConfig?.roundCount,
+    timeUnit:       baseConfig?.timeUnit,
+    censusStats:    variant.censusStats,
+    narrative:      variant.narrative,
+  }
+  return (
+    <VariantResults
+      variant={variant}
+      simulationResult={simulationResult}
+      narrative={variant.narrative}
+    />
+  )
+}
+
+// Inner result viewer for a single variant. Mirrors ResultsScreen's tab
+// layout. Kept as its own component (rather than reusing ResultsScreen
+// directly) so the header reads "Variant N" instead of "Simulation Complete",
+// and the page width matches the scenario container.
+function VariantResults({ variant, simulationResult, narrative }) {
+  const [tab, setTab] = useState('chronicle')
+  const summary    = simulationResult?.summary
+  const dialogues  = simulationResult?.dialogues || []
+  const fullEvents = simulationResult?.events    || []
+  const censusStats= simulationResult?.censusStats
+  const roundCount = simulationResult?.roundCount
+  const timeUnit   = simulationResult?.timeUnit
+  const idx = (variant?.variantIndex ?? 0) + 1
+
   return (
     <div>
-      <div style={{ backgroundColor: C.bgCard, border: `1px solid ${C.purple}55`, borderRadius: 8, padding: '20px 24px', marginBottom: 14, maxWidth: 720, marginLeft: 'auto', marginRight: 'auto' }}>
-        <div style={{ fontSize: 10, color: C.purple, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 10 }}>Variant {(variant?.variantIndex ?? 0) + 1} · {summary?.alive}/{summary?.total} alive</div>
-        {n?.headline && (
-          <div style={{ fontSize: 16, color: C.parch, fontStyle: 'italic', fontFamily: 'Georgia, serif', marginBottom: 14, lineHeight: 1.4 }}>
-            &ldquo;{n.headline}&rdquo;
-          </div>
-        )}
-        {n?.narrative && (
-          <div style={{ fontSize: 14, color: C.parch, fontFamily: 'Georgia, serif', lineHeight: 1.7 }}>
-            {n.narrative.split(/\n\n+/).map((p, i) => <p key={i} style={{ margin: i === 0 ? '0 0 12px' : '12px 0' }}>{p}</p>)}
-          </div>
-        )}
+      <div style={{ marginBottom: 12, padding: '8px 12px', backgroundColor: C.bgCard, border: `1px solid ${C.purple}33`, borderRadius: 5 }}>
+        <div style={{ fontSize: 10, color: C.purple, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.14em' }}>
+          Variant {idx} · {summary?.alive}/{summary?.total} alive · seed {variant.seed}
+        </div>
       </div>
+      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${C.border}`, marginBottom: 16 }}>
+        {RESULT_TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={tabStyle(tab === t.id)}>{t.label}</button>
+        ))}
+      </div>
+      {tab === 'chronicle' && (
+        <ChronicleTab
+          summary={summary} narrative={narrative} narrativeError={null}
+          fullEvents={fullEvents} dialogues={dialogues}
+          censusStats={censusStats}
+        />
+      )}
+      {tab === 'characters' && <CharacterThreads simulationResult={simulationResult} />}
+      {tab === 'world'      && <MapView simulationResult={simulationResult} />}
+      {tab === 'bonds'      && <BondNetwork simulationResult={simulationResult} />}
+      {tab === 'causation'  && <ButterflyTraceView simulationResult={simulationResult} />}
     </div>
   )
 }

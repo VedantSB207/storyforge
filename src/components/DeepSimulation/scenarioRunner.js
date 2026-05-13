@@ -57,6 +57,7 @@ async function runVariant({ variantIndex, baseSeed, chars, lore, taxonomy, castS
     agents:         lastSnap.agents,
     events:         lastSnap.events,
     butterflyStats: lastSnap.butterflyStats,
+    butterflyTrace: lastSnap.butterflyTrace || null,   // Phase 6/6b: kept in-memory; caller decides whether to persist
     tierCounters:   lastSnap.tierCounters,
     llmUsageAll:    lastSnap.llmUsageAll,
     dialogues:      lastSnap.dialogues || [],

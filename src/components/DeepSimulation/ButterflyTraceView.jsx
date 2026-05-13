@@ -34,10 +34,11 @@ export function ButterflyTraceView({ simulationResult }) {
     return (
       <div style={{ padding: 40, textAlign: 'center', fontFamily: 'system-ui', color: C.muted }}>
         <div style={{ fontSize: 13 }}>Butterfly Trace data not available for this run.</div>
-        <div style={{ fontSize: 11, marginTop: 6 }}>
-          The full butterfly trace is generated during simulation but not persisted to disk in
-          per-sim files (size optimisation). Run a fresh simulation to view trace data, or
-          enable trace persistence in Phase 6.
+        <div style={{ fontSize: 11, marginTop: 6, maxWidth: 460, marginLeft: 'auto', marginRight: 'auto', lineHeight: 1.6 }}>
+          The butterfly trace is heavy (≈5&thinsp;MB per 200 cast, ≈50&thinsp;MB at 1000) so
+          it isn't saved with every simulation by default. To view causation
+          data on past runs, enable <strong>Preserve causation data</strong> on
+          the setup screen before running.
         </div>
       </div>
     )
