@@ -3,6 +3,7 @@
 // dice-rolled values within ranges. No LLM calls.
 
 import { GENERIC_VALUES, GENERIC_FEARS } from './deepSimSchema.js'
+import { resolveLifespan } from '../WorldRules/lifespanResolver.js'
 
 // Phase 4a.1: deterministic 6-char base36 id using the seeded rng so two
 // runs with the same seed produce byte-identical agent IDs. Previously
@@ -49,8 +50,18 @@ export function resetNameCounter() {
 }
 
 // Create a single procedural agent
-export function createProceduralAgent({ genreId, kindTemplate, rng = Math.random }) {
-  const lifespan = Math.max(1, kindTemplate.typicalLifeExpectancy * jitter(rng, 0.2))
+// Phase 6/6a-ii: lifespan resolved through worldRules.lifespanOverrides +
+// globalLifespanMultiplier; falls back to kindTemplate.typicalLifeExpectancy
+// when no overrides match.
+export function createProceduralAgent({ genreId, kindTemplate, rng = Math.random, worldRules = null }) {
+  const lifespan = resolveLifespan({
+    species:    kindTemplate.id,           // also tries lowercase id match
+    genreTag:   `${genreId}:${kindTemplate.id}`,
+    kindId:     kindTemplate.id,
+    baseline:   kindTemplate.typicalLifeExpectancy,
+    jitter:     jitter(rng, 0.2),
+    worldRules,
+  })
   return {
     // Layer 1 — Identity
     id:        `npc_${rngId(rng)}`,
@@ -125,7 +136,9 @@ export function createProceduralAgent({ genreId, kindTemplate, rng = Math.random
 //   for each genre × kind:
 //     count = kind.typicalCount × (castSize / 100) × genre.weight × censusMultiplier
 // Bound agents (Bible) are NOT generated here — those are added in CensusManager.
-export function generateNPCs({ taxonomy, castSize, censusMultiplier, rng = Math.random }) {
+// Phase 6/6a-ii: threads worldRules through so procedural agents get the
+// writer's lifespan overrides and global multiplier.
+export function generateNPCs({ taxonomy, castSize, censusMultiplier, rng = Math.random, worldRules = null }) {
   resetNameCounter()
   const npcs = []
   for (const genre of (taxonomy?.genres || [])) {
@@ -138,7 +151,7 @@ export function generateNPCs({ taxonomy, castSize, censusMultiplier, rng = Math.
         kind.typicalCount * (castSize / 100) * genre.weight * censusMultiplier,
       )
       for (let i = 0; i < count; i++) {
-        npcs.push(createProceduralAgent({ genreId: genre.id, kindTemplate: kind, rng }))
+        npcs.push(createProceduralAgent({ genreId: genre.id, kindTemplate: kind, rng, worldRules }))
       }
     }
   }

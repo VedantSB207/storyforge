@@ -5,11 +5,19 @@ import { callClaude } from '../../api.js'
 import { TAXONOMY_MODEL, TAXONOMY_MAX_TOKENS } from './deepSimSchema.js'
 
 // ── Build the project content blob the LLM reads ────────────────────────────
-export function buildProjectContent({ chars = [], lore = [], timelineChapters = [], project = null }) {
+// Phase 6/6a-ii: customNarrativeRules from World Rules are surfaced as a
+// dedicated section so the taxonomy detector honours them when proposing
+// kinds/genres (e.g. "vampires age 1 year per century" should yield a kind
+// with a 5000-year typical life expectancy, not 80).
+export function buildProjectContent({ chars = [], lore = [], timelineChapters = [], project = null, customNarrativeRules = null }) {
   const parts = []
 
   if (project?.title || project?.genre) {
     parts.push(`# Project\nTitle: ${project.title || 'Untitled'}${project.genre ? ` (${project.genre})` : ''}`)
+  }
+
+  if (customNarrativeRules && customNarrativeRules.trim()) {
+    parts.push(`# World Rules (writer-stated — honour these when proposing kinds and lifespans)\n${customNarrativeRules.trim()}`)
   }
 
   if (chars.length > 0) {
@@ -107,6 +115,8 @@ typicalCount is a per-100-agents count, integer.`
 // ── Generate taxonomy ──────────────────────────────────────────────────────
 // Returns { taxonomy, raw, usage } on success, or throws with the underlying
 // error message bound (NOT swallowed — Phase 1 lesson learned).
+// Phase 6/6a-ii: projectInputs may include customNarrativeRules — they're
+// passed through buildProjectContent so the detector honours them.
 export async function generateTaxonomy(projectInputs) {
   const content = buildProjectContent(projectInputs)
   if (!content || content.trim().length < 30) {

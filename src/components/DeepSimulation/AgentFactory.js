@@ -7,6 +7,8 @@
 //   char.secrets — multi-line free text
 // Both get normalised into string[] here so the schema's typing holds.
 
+import { resolveLifespan } from '../WorldRules/lifespanResolver.js'
+
 const splitTraits = (s) =>
   String(s || '')
     .split(',')
@@ -22,7 +24,9 @@ const splitSecrets = (s) =>
 // Phase 6/6a-i: optional hydration param applies Bible-inference results
 // (age, status, location, backgroundSummary) and seeded bonds + Knowledge.
 // When absent, falls back to the Phase 1 defaults exactly as before.
-export function createAgentFromBibleCharacter(char, hydration = null, seededKnowledge = null) {
+// Phase 6/6a-ii: worldRules controls per-character lifespan overrides + the
+// global lifespan multiplier. Falls back to 80 when worldRules absent.
+export function createAgentFromBibleCharacter(char, hydration = null, seededKnowledge = null, worldRules = null) {
   const agentId   = `agent_${char.id}`
   // Effective inference = inference + writer edits from Hydration Review
   const eff       = hydration?.effective?.[agentId] || hydration?.inferences?.[agentId] || null
@@ -30,6 +34,18 @@ export function createAgentFromBibleCharacter(char, hydration = null, seededKnow
   const status    = (eff?.status || 'alive').toLowerCase()
   const isActive  = (status === 'alive' || status === 'dormant')
   const isOffstage = (status === 'missing' || status === 'exiled' || status === 'dormant')
+
+  // Resolve life expectancy via the World Rules resolver. First match wins
+  // across: lowercase character name → species → genreTag tail → kind id.
+  const lifeExpectancy = resolveLifespan({
+    characterName: char.name,
+    species:       char.species,
+    genreTag:      null,           // bound chars don't have a genreTag yet
+    kindId:        null,
+    baseline:      80,
+    jitter:        1.0,
+    worldRules,
+  })
 
   return {
     // Layer 1 — Identity
@@ -42,7 +58,7 @@ export function createAgentFromBibleCharacter(char, hydration = null, seededKnow
 
     // Layer 2 — Body and time
     age:            (eff?.age?.value ?? 30),
-    lifeExpectancy: 80,
+    lifeExpectancy: lifeExpectancy,
     health:         1.0,
     conditions:    [],
     mortalityRisk:  0,
@@ -120,10 +136,10 @@ export function createAgentFromBibleCharacter(char, hydration = null, seededKnow
   }
 }
 
-export function createAgentsFromBible(chars = [], hydration = null, knowledgeByAgentId = null) {
+export function createAgentsFromBible(chars = [], hydration = null, knowledgeByAgentId = null, worldRules = null) {
   return (chars || []).map(c => {
     const agentId = `agent_${c.id}`
     const seeded = knowledgeByAgentId?.[agentId] || null
-    return createAgentFromBibleCharacter(c, hydration, seeded)
+    return createAgentFromBibleCharacter(c, hydration, seeded, worldRules)
   })
 }

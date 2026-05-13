@@ -108,7 +108,9 @@ function describeKnowledgeAbout(viewer, subject) {
 
 // Generate dialogue for one event. Returns { id, round, eventId, participants,
 // lines, category, generationCost, usage } or null on failure.
-export async function generateDialogue({ event, participants, agentById, simId, dialogueIdx, storySnapshot = null }) {
+// Phase 6/6a-ii: customNarrativeRules from World Rules get appended to the
+// system prompt so dialogue honours writer-stated universe rules.
+export async function generateDialogue({ event, participants, agentById, simId, dialogueIdx, storySnapshot = null, customNarrativeRules = null }) {
   const [a, b] = participants
   const bondAB = a.bonds?.[b.id]
   const bondBA = b.bonds?.[a.id]
@@ -139,9 +141,15 @@ export async function generateDialogue({ event, participants, agentById, simId, 
 
   // Phase 6/6a-i: weave story snapshot into system prompt so the dialogue
   // honours the writer's current story moment.
-  const systemPrompt = storySnapshot
-    ? `${SYSTEM_PROMPT}\n\nThe writer's story currently sits at this moment:\n"${storySnapshot}"\n\nThe scene below takes place AFTER this moment. Dialogue should be consistent with what the characters know and feel given this story state.`
-    : SYSTEM_PROMPT
+  // Phase 6/6a-ii: also append customNarrativeRules so dialogue honours
+  // writer-stated world rules.
+  let systemPrompt = SYSTEM_PROMPT
+  if (storySnapshot) {
+    systemPrompt += `\n\nThe writer's story currently sits at this moment:\n"${storySnapshot}"\n\nThe scene below takes place AFTER this moment. Dialogue should be consistent with what the characters know and feel given this story state.`
+  }
+  if (customNarrativeRules && customNarrativeRules.trim()) {
+    systemPrompt += `\n\nWORLD RULES — honour these when writing dialogue:\n${customNarrativeRules.trim()}`
+  }
 
   let res
   try {
@@ -182,7 +190,7 @@ export async function generateDialogue({ event, participants, agentById, simId, 
 }
 
 // Generate all candidates in parallel. Returns array of dialogue objects.
-export async function generateDialogues({ candidates, agentById, simId = '', storySnapshot = null }) {
+export async function generateDialogues({ candidates, agentById, simId = '', storySnapshot = null, customNarrativeRules = null }) {
   if (!candidates || candidates.length === 0) return []
   const results = await Promise.all(
     candidates.map((c, i) => generateDialogue({
@@ -192,6 +200,7 @@ export async function generateDialogues({ candidates, agentById, simId = '', sto
       simId,
       dialogueIdx:  i,
       storySnapshot,
+      customNarrativeRules,
     }))
   )
   return results.filter(Boolean)

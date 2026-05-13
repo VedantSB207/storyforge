@@ -1,7 +1,7 @@
 # StoryForge Deep Simulation Engine
 ## Implementation Design Document
 
-**Version 1.8**
+**Version 1.9**
 **Branch:** `deep-simulation-rebuild`
 **Document location in repo:** `docs/SIMULATION_ENGINE_DESIGN.md`
 
@@ -749,3 +749,5 @@ When this document is updated by future Claude Code sessions, the version number
 **Version 1.7** — Phase 5/6 split documented. Phase 5 = visible world experience. Phase 6 = analytical depth + polish.
 
 **Version 1.8** — Phase 6: Bible Hydration (character inference, relationship → bonds, story snapshot, knowledge seeding). World Rules panel + Story-Scale Presets. Insight panels (blind spot, promotion candidates, emotional weather, themes). Live progress streaming. Credit observability. LLM-enriched character narratives.
+
+**Version 1.9** — Phase 6a-ii landed. Top-level World Rules panel ships with: per-character/kind lifespan overrides (with substring fallback matching), aging matters toggle, aging speed multiplier, per-need depletion-rate multipliers, global lifespan multiplier, custom narrative rules. Story-Scale Presets (Thriller 30 days / Drama 30 weeks / Novel 24 months / Saga 20 years / Epic 100 years) replace the Phase 5 difficulty preset. customNarrativeRules thread through character inference, taxonomy detection, dialogue, and the chronicler. Mortality events now carry a `cause` field (`aging` | `health`). Verified on the Jojo project: long-lived chars (Vedant Organisation 10 000y, Master Akshara 2 000y, The Witch) survive a 30-week Drama run with `aging.matters: false`; zero aging deaths; chronicler honours vampire / werewolf-cat / eternal-institution rules. Test cost $0.55.

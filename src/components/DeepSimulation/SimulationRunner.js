@@ -60,6 +60,8 @@ export async function* runSimulationRounds({
   // With same seed, two runs will be byte-identical when this is on.
   disableLLM = false,
   // Phase 5 pre-fix: difficulty preset for needs depletion pacing.
+  // Phase 6/6a-ii: superseded by worldRules.needs.*Speed; kept as a legacy
+  // fallback for callers that haven't migrated yet (e.g. older tests).
   difficulty = 'standard',
   // Phase 6/6a-i: hydration data (inferences + bonds), story snapshot,
   // and pre-seeded Knowledge entries. Runner threads them through to the
@@ -68,6 +70,10 @@ export async function* runSimulationRounds({
   hydration = null,
   storySnapshot = null,
   seededKnowledgeByAgentId = null,
+  // Phase 6/6a-ii: world rules — aging behaviour, needs multipliers,
+  // lifespan overrides, custom narrative rules. When null, falls back to
+  // legacy difficulty.
+  worldRules = null,
 }) {
   const effectiveRng = seed != null ? makeSeededRng(seed) : rng
   let agents = initialAgents.map(a => {
@@ -120,7 +126,10 @@ export async function* runSimulationRounds({
   let allEvents = []
 
   for (let round = 1; round <= roundCount; round++) {
-    const ctx = { round, timeUnit, difficulty }
+    // Phase 6/6a-ii: worldRules ride along in ctx so updaters can read aging
+    // behaviour + per-need multipliers + custom narrative rules without
+    // threading them through every function signature.
+    const ctx = { round, timeUnit, difficulty, worldRules }
     const roundEvents = []
 
     tierCounters.tier1ThisRound = 0   // reset per-round Ollama cap
@@ -256,7 +265,10 @@ export async function* runSimulationRounds({
   if (!disableLLM) {
     const candidates = selectDialogueCandidates(allEvents, agentById, 0)
     if (candidates.length > 0) {
-      dialogues = await generateDialogues({ candidates, agentById, storySnapshot })
+      dialogues = await generateDialogues({
+        candidates, agentById, storySnapshot,
+        customNarrativeRules: worldRules?.customNarrativeRules || null,
+      })
     }
   }
 

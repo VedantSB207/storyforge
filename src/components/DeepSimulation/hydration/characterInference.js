@@ -117,6 +117,11 @@ export async function inferCharacter({ char, chapterExcerpts = '', worldRulesTex
 // Uses cached results where the profile hash matches; only re-infers for
 // characters whose profile text has changed.
 //
+// Phase 6/6a-ii: worldRulesText now receives the writer's customNarrativeRules
+// directly (not lore stringified) — resolves Phase 6a-i Deviation 1. The
+// rules also salt the per-character cache hash so changing them invalidates
+// inferences.
+//
 // onProgress fires per character with { charId, name, status }.
 // Returns { inferences: { agentId: inference }, totalCost, errors, callsUsed }.
 export async function inferAllCharacters({ chars, worldRulesText = '', cachedHydration = {}, onProgress = null }) {
@@ -125,9 +130,14 @@ export async function inferAllCharacters({ chars, worldRulesText = '', cachedHyd
   let totalCost = 0
   let callsUsed = 0
 
+  // Salt the cache hash with the world rules text so a rules edit triggers
+  // re-inference for every character (their "age" or "species" interpretation
+  // depends on rules).
+  const rulesSalt = hashText(worldRulesText || '')
+
   for (const char of chars) {
     const agentId = `agent_${char.id}`
-    const hash = profileHash(char)
+    const hash = profileHash(char) + ':' + rulesSalt
     const cached = inferences[agentId]
     if (cached && cached.profileHash === hash) {
       onProgress?.({ charId: char.id, name: char.name, status: 'cached' })
@@ -140,6 +150,8 @@ export async function inferAllCharacters({ chars, worldRulesText = '', cachedHyd
     const result = await inferCharacter({ char, worldRulesText })
     callsUsed += 1
     if (result.ok) {
+      // Persist the salted hash so cache invalidation tracks rules changes
+      result.inference.profileHash = hash
       inferences[agentId] = result.inference
       totalCost += result.cost || 0
       onProgress?.({ charId: char.id, name: char.name, status: 'done' })
@@ -150,6 +162,17 @@ export async function inferAllCharacters({ chars, worldRulesText = '', cachedHyd
   }
 
   return { inferences, totalCost, errors, callsUsed }
+}
+
+// Tiny FNV-1a helper for the rules salt — same recipe as profileHash but
+// over an arbitrary string.
+function hashText(s) {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = (h * 0x01000193) >>> 0
+  }
+  return h.toString(16)
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────

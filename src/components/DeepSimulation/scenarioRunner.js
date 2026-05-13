@@ -25,9 +25,15 @@ function variantSeed(baseSeed, idx) {
 //   variantIndex, seed, summary, agents, events, butterflyStats,
 //   tierCounters, dialogues, llmUsageAll
 // }.
-async function runVariant({ variantIndex, baseSeed, chars, lore, taxonomy, castSize, roundCount, timeUnit, censusMultiplier, difficulty, onProgress }) {
+// Phase 6/6a-ii: variants accept worldRules + hydration + storySnapshot so
+// scenarios honour the same configuration as a single progressive run.
+async function runVariant({ variantIndex, baseSeed, chars, lore, taxonomy, castSize, roundCount, timeUnit, censusMultiplier, difficulty, onProgress, worldRules = null, hydration = null, storySnapshot = null, seededKnowledgeByAgentId = null }) {
   const seed = variantSeed(baseSeed, variantIndex)
-  const built = buildCensus({ chars, taxonomy, castSize, censusMultiplier, rng: makeSeededRng(seed) })
+  const built = buildCensus({
+    chars, taxonomy, castSize, censusMultiplier,
+    rng: makeSeededRng(seed),
+    hydration, seededKnowledgeByAgentId, worldRules,
+  })
 
   let lastSnap = null
   const gen = runSimulationRounds({
@@ -35,6 +41,7 @@ async function runVariant({ variantIndex, baseSeed, chars, lore, taxonomy, castS
     roundCount, timeUnit,
     lore, chars, seed,
     difficulty,
+    hydration, storySnapshot, seededKnowledgeByAgentId, worldRules,
   })
   for await (const snap of gen) {
     lastSnap = snap
@@ -68,6 +75,11 @@ export async function runScenario({
   mode = 'sequential',
   difficulty = 'standard',
   onProgress = null,
+  // Phase 6/6a-ii passthrough
+  worldRules = null,
+  hydration = null,
+  storySnapshot = null,
+  seededKnowledgeByAgentId = null,
 }) {
   const N = Math.min(MAX_SCENARIO_VARIANTS, Math.max(1, variantCount))
   const variants = []
@@ -85,6 +97,7 @@ export async function runScenario({
         runVariant({
           variantIndex: i, baseSeed, chars, lore, taxonomy,
           castSize, roundCount, timeUnit, censusMultiplier, difficulty, onProgress,
+          worldRules, hydration, storySnapshot, seededKnowledgeByAgentId,
         }).catch(err => {
           console.error(`[Scenario] variant ${i} failed:`, err)
           failures.push({ variantIndex: i, error: err.message || String(err) })
@@ -100,6 +113,7 @@ export async function runScenario({
         const v = await runVariant({
           variantIndex: i, baseSeed, chars, lore, taxonomy,
           castSize, roundCount, timeUnit, censusMultiplier, difficulty, onProgress,
+          worldRules, hydration, storySnapshot, seededKnowledgeByAgentId,
         })
         variants.push(v)
       } catch (err) {

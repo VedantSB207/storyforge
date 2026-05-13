@@ -29,9 +29,11 @@ export function buildCensus({
   // Phase 6/6a-i — hydration + seeded knowledge
   hydration = null,
   seededKnowledgeByAgentId = null,
+  // Phase 6/6a-ii — world rules (lifespan + aging behaviour)
+  worldRules = null,
 }) {
-  const boundAgents      = createAgentsFromBible(chars || [], hydration, seededKnowledgeByAgentId)
-  const proceduralAgents = generateNPCs({ taxonomy, castSize, censusMultiplier, rng })
+  const boundAgents      = createAgentsFromBible(chars || [], hydration, seededKnowledgeByAgentId, worldRules)
+  const proceduralAgents = generateNPCs({ taxonomy, castSize, censusMultiplier, rng, worldRules })
   const census           = [...boundAgents, ...proceduralAgents]
 
   // Active cast = all bound + procedural sampled by relevance.

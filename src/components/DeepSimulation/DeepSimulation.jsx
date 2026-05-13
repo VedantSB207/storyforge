@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { C, genId } from '../../constants.js'
 import { TIME_UNITS, CENSUS_MULTIPLIER, DIFFICULTY_PRESETS, DIFFICULTY_DEFAULT } from './deepSimSchema.js'
+import { NARRATIVE_SCALE_PRESETS, NARRATIVE_SCALE_DEFAULT, DEFAULT_WORLD_RULES, withDefaults as withWorldRulesDefaults } from '../WorldRules/worldRulesSchema.js'
 import { runSimulationRounds, buildSummary, makeSeededRng } from './SimulationRunner.js'
 import { EventLog } from './EventLog.jsx'
 import { TaxonomyReview } from './TaxonomyReview.jsx'
@@ -49,13 +50,23 @@ export function DeepSimulation({
   storySnapshot = '',
   hydrationData = null,
   setHydrationData = () => {},
+  // Phase 6/6a-ii — world rules (aging, lifespan, custom narrative rules)
+  worldRules = null,
 }) {
+  const effectiveWorldRules = useMemo(() => withWorldRulesDefaults(worldRules), [worldRules])
+
+  // Phase 6/6a-ii — Story-Scale Preset replaces the Phase 5 difficulty preset.
+  // Each preset sets the time unit, round count, and needs pace. Switching
+  // presets updates timeUnit + roundCount; the writer can still override.
+  const [scaleId, setScaleId] = useState(effectiveWorldRules.narrativeScale || NARRATIVE_SCALE_DEFAULT)
+  const scale = NARRATIVE_SCALE_PRESETS[scaleId] || NARRATIVE_SCALE_PRESETS[NARRATIVE_SCALE_DEFAULT]
+
   const [step, setStep]               = useState('setup')
   const [mode, setMode]               = useState('progressive')
   const [castSize, setCastSize]       = useState(200)
-  const [roundCount, setRoundCount]   = useState(30)
-  const [timeUnit, setTimeUnit]       = useState('year')
-  const [difficulty, setDifficulty]   = useState(DIFFICULTY_DEFAULT)   // Phase 5 pre-fix
+  const [roundCount, setRoundCount]   = useState(scale.rounds)
+  const [timeUnit, setTimeUnit]       = useState(scale.timeUnit)
+  const [difficulty, setDifficulty]   = useState(DIFFICULTY_DEFAULT)   // legacy fallback for runner
   const [variantCount, setVariantCount] = useState(3)   // Phase 4b/4 — scenario only
 
   // Phase 6/6a-i — hydration state + per-sim story snapshot + knowledge seeding toggle
@@ -145,7 +156,8 @@ export function DeepSimulation({
     setTaxonomyLoading(true)
     setStep('taxonomy_loading')
     try {
-      const { taxonomy: tx, usage } = await generateTaxonomy({ chars, lore, timelineChapters, project })
+      // Phase 6/6a-ii: pass customNarrativeRules so the detector honours them
+      const { taxonomy: tx, usage } = await generateTaxonomy({ chars, lore, timelineChapters, project, customNarrativeRules: effectiveWorldRules.customNarrativeRules })
       setTaxonomy(tx)
       setTaxonomyUsage(usage)
       setStep('taxonomy_review')
@@ -172,9 +184,10 @@ export function DeepSimulation({
     return false
   })()
 
-  // worldRulesText is currently the project lore joined as a single string.
-  // Phase 6/6a-ii will replace this with the dedicated World Rules panel.
-  const worldRulesText = (lore || []).map(r => `[${r.cat || 'Rule'}] ${r.rule || ''}`).join('\n').slice(0, 4000)
+  // Phase 6/6a-ii: worldRulesText now comes from the dedicated World Rules
+  // panel's customNarrativeRules field. Lore stays in its own structured
+  // store on the Story Bible. Resolves Phase 6a-i Deviation 1.
+  const worldRulesText = (effectiveWorldRules.customNarrativeRules || '').slice(0, 4000)
 
   // Run hydration pipeline. Used both for first-run and "re-run inference".
   const runHydrationPipeline = async () => {
@@ -270,6 +283,7 @@ export function DeepSimulation({
 
     // Build census + active cast from taxonomy (deterministic given seed).
     // Bound agents get rebuilt with hydration applied before census.
+    // Phase 6/6a-ii: thread worldRules into census so lifespan overrides apply.
     const built = buildCensus({
       chars,
       taxonomy,
@@ -278,6 +292,7 @@ export function DeepSimulation({
       rng: makeSeededRng(seed),
       hydration: effectiveHydration,
       seededKnowledgeByAgentId,
+      worldRules: effectiveWorldRules,
     })
     setAgentsLive(built.activeCast)
     setCensusStats(built.stats)
@@ -304,6 +319,8 @@ export function DeepSimulation({
         hydration: effectiveHydration,
         storySnapshot: activeSnapshot,
         seededKnowledgeByAgentId,
+        // Phase 6/6a-ii — world rules drive aging, needs pacing, lifespans
+        worldRules: effectiveWorldRules,
       })
 
       for await (const snap of gen) {
@@ -356,6 +373,8 @@ export function DeepSimulation({
         roundCount,
         timeUnit,
         storySnapshot: activeSnapshot,
+        // Phase 6/6a-ii — chronicler honours writer-stated world rules
+        customNarrativeRules: effectiveWorldRules.customNarrativeRules,
       })
       setNarrative(narrativeOut)
     } catch (err) {
@@ -435,6 +454,8 @@ export function DeepSimulation({
         variantCount,
         mode: 'sequential',
         difficulty,
+        // Phase 6/6a-ii — scenario variants honour the same world rules
+        worldRules: effectiveWorldRules,
         onProgress: ({ variantIndex, round, roundCount: rc }) =>
           setScenarioProgress({ phase: 'simulating', variantIndex, round, roundCount: rc }),
       })
@@ -674,24 +695,33 @@ export function DeepSimulation({
           </div>
         </Section>
 
-        {/* Difficulty preset — Phase 5 pre-fix */}
-        <Section label="Difficulty">
+        {/* Phase 6/6a-ii — Story-Scale Preset (replaces Phase 5 difficulty) */}
+        <Section label="Story-Scale Preset">
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {Object.keys(DIFFICULTY_PRESETS).map(d => (
-              <button key={d} onClick={() => setDifficulty(d)}
+            {Object.values(NARRATIVE_SCALE_PRESETS).map(p => (
+              <button key={p.id} onClick={() => {
+                setScaleId(p.id)
+                setTimeUnit(p.timeUnit)
+                setRoundCount(p.rounds)
+              }}
                 style={{
                   padding: '6px 14px',
-                  backgroundColor: difficulty === d ? C.gold + '33' : C.bgCard,
-                  color: difficulty === d ? C.gold : C.muted,
-                  border: `1px solid ${difficulty === d ? C.gold + '66' : C.border}`,
-                  borderRadius: 4, fontSize: 11, cursor: 'pointer', fontFamily: 'system-ui', textTransform: 'capitalize',
-                }}>{d}</button>
+                  backgroundColor: scaleId === p.id ? C.purple + '33' : C.bgCard,
+                  color: scaleId === p.id ? C.purpleLight : C.muted,
+                  border: `1px solid ${scaleId === p.id ? C.purple + '66' : C.border}`,
+                  borderRadius: 4, fontSize: 11, cursor: 'pointer', fontFamily: 'system-ui',
+                }}>{p.label}</button>
             ))}
           </div>
           <div style={{ marginTop: 8, fontSize: 10, color: C.muted, fontFamily: 'system-ui', fontStyle: 'italic', lineHeight: 1.5 }}>
-            {difficulty === 'gentle'   && 'Gentle — slow-burn drama, most characters survive. Needs deplete slower.'}
-            {difficulty === 'standard' && 'Standard — balanced pressure. Phase 4 baseline calibration.'}
-            {difficulty === 'harsh'    && 'Harsh — apocalyptic, most characters perish. Needs deplete faster.'}
+            {scaleId === 'thriller' && 'Thriller — 30 days. High pressure, aging irrelevant. Best for tight survival or action arcs.'}
+            {scaleId === 'drama'    && 'Drama — 30 weeks (~7 months). Balanced needs pressure; relationships dominate. Default for most stories.'}
+            {scaleId === 'novel'    && 'Novel — 24 months. Slow burn; relationships and quiet shifts. Aging still irrelevant.'}
+            {scaleId === 'saga'     && 'Saga — 20 years. Multi-generational; aging matters; characters can die of old age.'}
+            {scaleId === 'epic'     && 'Epic — 100 years. Civilisational scale; lifetimes pass; aging dominates.'}
+          </div>
+          <div style={{ marginTop: 6, fontSize: 10, color: C.gold, fontFamily: 'system-ui' }}>
+            Universe behaviour (aging speed, lifespan overrides, custom rules) lives in the <strong>World Rules</strong> tab.
           </div>
         </Section>
 

@@ -249,7 +249,7 @@ function approximateHorizon(rounds, unit) {
 // Public — generate the narrative summary. Returns { narrative, headline,
 // notableEvents, usage } on success. Throws with bound error on failure
 // (Phase 1 lesson: never silently swallow).
-export async function generateNarrativeSummary({ simulationResult, project, taxonomy, chars, censusStats, roundCount, timeUnit, storySnapshot = null }) {
+export async function generateNarrativeSummary({ simulationResult, project, taxonomy, chars, censusStats, roundCount, timeUnit, storySnapshot = null, customNarrativeRules = null }) {
   const userContent = buildUserContent({
     project,
     taxonomy,
@@ -267,9 +267,16 @@ export async function generateNarrativeSummary({ simulationResult, project, taxo
 
   // Phase 6/6a-i: weave the story snapshot into the system prompt so the
   // chronicle continues from the writer's current story moment.
-  const systemPrompt = storySnapshot
-    ? `${SYSTEM_PROMPT}\n\nThe writer's story currently sits at this moment:\n"${storySnapshot}"\n\nYour chronicle should continue from there — honour the story state when describing what unfolded.`
-    : SYSTEM_PROMPT
+  // Phase 6/6a-ii: also append customNarrativeRules so the chronicler honors
+  // writer-stated world rules (e.g. "vampires weakened but not killed by
+  // sunlight", "werewolf cats are matrilineal").
+  let systemPrompt = SYSTEM_PROMPT
+  if (storySnapshot) {
+    systemPrompt += `\n\nThe writer's story currently sits at this moment:\n"${storySnapshot}"\n\nYour chronicle should continue from there — honour the story state when describing what unfolded.`
+  }
+  if (customNarrativeRules && customNarrativeRules.trim()) {
+    systemPrompt += `\n\nWORLD RULES — these are the writer's stated rules of this universe. Honour them in everything you describe:\n${customNarrativeRules.trim()}`
+  }
 
   let response
   try {
