@@ -77,6 +77,13 @@ ipcMain.handle('call-claude', async (_, payload) => {
   const apiKey = store.get('apiKey')
   if (!apiKey) return { error: 'no_key', message: 'API key not set. Go to Settings to add it.' }
 
+  // Phase 4b.1: hard 60s timeout via AbortController. Without this, a stalled
+  // HTTP/2 connection (which happened mid-Scenario when credits hit zero —
+  // Anthropic accepted the TCP connection but never wrote a 400 response body)
+  // hung the whole simulation indefinitely. AbortController guarantees the
+  // promise resolves one way or the other within 60s.
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 60_000)
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -86,13 +93,17 @@ ipcMain.handle('call-claude', async (_, payload) => {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify(payload),
+      signal: controller.signal,
     })
+    clearTimeout(timeoutId)
     const data = await response.json()
     if (!response.ok) {
       return { error: 'api', message: data?.error?.message || `API returned ${response.status}`, status: response.status }
     }
     return data
   } catch (err) {
+    clearTimeout(timeoutId)
+    if (err.name === 'AbortError') return { error: 'timeout', message: 'Claude API call exceeded 60s timeout' }
     return { error: 'network', message: err.message }
   }
 })

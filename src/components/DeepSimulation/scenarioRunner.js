@@ -70,27 +70,44 @@ export async function runScenario({
   const N = Math.min(MAX_SCENARIO_VARIANTS, Math.max(1, variantCount))
   const variants = []
 
+  // Phase 4b.1: per-variant try/catch so one failed variant doesn't sink
+  // the whole scenario. If a variant throws (network, timeout, API error,
+  // memory pressure), log it, mark it as failed, and continue with the
+  // remaining variants. Caller can build a partial comparison from
+  // whichever variants succeeded.
+  const failures = []
   if (mode === 'parallel') {
     const runners = []
     for (let i = 0; i < N; i++) {
-      runners.push(runVariant({
-        variantIndex: i, baseSeed, chars, lore, taxonomy,
-        castSize, roundCount, timeUnit, censusMultiplier, onProgress,
-      }))
+      runners.push(
+        runVariant({
+          variantIndex: i, baseSeed, chars, lore, taxonomy,
+          castSize, roundCount, timeUnit, censusMultiplier, onProgress,
+        }).catch(err => {
+          console.error(`[Scenario] variant ${i} failed:`, err)
+          failures.push({ variantIndex: i, error: err.message || String(err) })
+          return null
+        })
+      )
     }
     const out = await Promise.all(runners)
-    variants.push(...out)
+    for (const v of out) if (v) variants.push(v)
   } else {
     for (let i = 0; i < N; i++) {
-      const v = await runVariant({
-        variantIndex: i, baseSeed, chars, lore, taxonomy,
-        castSize, roundCount, timeUnit, censusMultiplier, onProgress,
-      })
-      variants.push(v)
+      try {
+        const v = await runVariant({
+          variantIndex: i, baseSeed, chars, lore, taxonomy,
+          castSize, roundCount, timeUnit, censusMultiplier, onProgress,
+        })
+        variants.push(v)
+      } catch (err) {
+        console.error(`[Scenario] variant ${i} failed:`, err)
+        failures.push({ variantIndex: i, error: err.message || String(err) })
+      }
     }
   }
 
-  return { variants }
+  return { variants, failures }
 }
 
 // Build comparison data across variants. Pure data — no LLM call here; the

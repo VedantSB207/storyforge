@@ -300,7 +300,7 @@ export function DeepSimulation({
     const wallStart = Date.now()
 
     try {
-      const { variants } = await runScenario({
+      const { variants, failures } = await runScenario({
         chars, lore, taxonomy,
         castSize, roundCount, timeUnit,
         censusMultiplier: CENSUS_MULTIPLIER,
@@ -310,6 +310,13 @@ export function DeepSimulation({
         onProgress: ({ variantIndex, round, roundCount: rc }) =>
           setScenarioProgress({ phase: 'simulating', variantIndex, round, roundCount: rc }),
       })
+      if (variants.length === 0) {
+        // All variants failed — surface error and bail. Phase 4b.1.
+        const errs = (failures || []).map(f => `v${f.variantIndex+1}: ${f.error}`).join('; ')
+        setScenarioProgress({ phase: 'error', error: `All variants failed. ${errs}` })
+        setStep('setup')
+        return
+      }
 
       // Generate per-variant narratives in parallel
       setScenarioProgress({ phase: 'narrating', variantIndex: 0, round: 0 })
@@ -371,11 +378,13 @@ export function DeepSimulation({
         baseConfig: { castSize, roundCount, timeUnit, variantCount, baseSeed },
         variantCount,
         variantSimIds,
+        successfulVariantCount: variants.length,
+        failures: failures || [],
         comparisonData,
         comparison,
         totalCost,
         totalWallTime,
-        summary: `${variantCount} variants × ${castSize} cast × ${roundCount} ${timeUnit}-rounds. ${comparisonData.fateDelta?.length || 0} bound chars had divergent fates across variants.`,
+        summary: `${variants.length}/${variantCount} variants × ${castSize} cast × ${roundCount} ${timeUnit}-rounds. ${comparisonData.fateDelta?.length || 0} bound chars had divergent fates${(failures||[]).length > 0 ? ` · ${failures.length} variant(s) failed` : ''}.`,
       }
 
       // Persist scenario record
@@ -745,6 +754,7 @@ export function DeepSimulation({
             : p.phase === 'narrating' ? 'Generating per-variant chronicles…'
             : p.phase === 'comparing' ? 'Synthesising cross-variant comparison…'
             : p.phase === 'starting'  ? 'Initialising variants…'
+            : p.phase === 'error'     ? `Failed: ${p.error}`
             : 'Working…'}
         </div>
         <div style={{ display: 'inline-block', width: 28, height: 28, border: `2px solid ${C.purple}33`, borderTopColor: C.purpleLight, borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
@@ -926,12 +936,18 @@ function ScenarioResultsScreen({ record, onNewSimulation }) {
         <button onClick={onNewSimulation} style={btnSecondary}>New Simulation</button>
       </div>
 
+      {(record.failures || []).length > 0 && (
+        <div style={{ padding: '8px 12px', marginBottom: 12, backgroundColor: C.accBright + '12', border: `1px solid ${C.accBright}44`, borderRadius: 5, fontSize: 11, color: C.accBright, fontFamily: 'system-ui' }}>
+          {record.failures.length} variant{record.failures.length === 1 ? '' : 's'} failed during this scenario: {record.failures.map(f => `v${f.variantIndex+1} (${f.error.slice(0,50)})`).join(', ')}
+        </div>
+      )}
+
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 12, borderBottom: `1px solid ${C.border}` }}>
         <button onClick={() => setActiveTab(-1)} style={tabStyle(activeTab === -1)}>Comparison</button>
         {variants.map((v, i) => (
           <button key={i} onClick={() => setActiveTab(i)} style={tabStyle(activeTab === i)}>
-            Variant {i + 1}
+            Variant {(v.variantIndex ?? i) + 1}
           </button>
         ))}
       </div>

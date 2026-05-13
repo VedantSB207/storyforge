@@ -13,6 +13,9 @@ export async function callClaude(payload) {
     if (data?.error === 'network') {
       throw new Error(data.message || 'Network error')
     }
+    if (data?.error === 'timeout') {
+      throw new Error(data.message || 'Claude API timeout after 60s')
+    }
     if (data?.error === 'api') {
       throw new Error(data.message || `API error (${data.status})`)
     }
