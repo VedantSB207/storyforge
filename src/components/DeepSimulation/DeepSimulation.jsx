@@ -14,6 +14,8 @@ import { CharacterThreads } from './CharacterThreads.jsx'
 import { MapView } from './MapView.jsx'
 import { BondNetwork } from './BondNetwork.jsx'
 import { ButterflyTraceView } from './ButterflyTraceView.jsx'
+import { SimulationProgress } from './SimulationProgress.jsx'
+import { estimateRunCost, formatEstimateRange, compareActualToEstimate } from './costEstimator.js'
 // Phase 6/6a-i — hydration pipeline
 import { HydrationReview } from './hydration/HydrationReview.jsx'
 import { runHydration, effectiveInference } from './hydration/hydrationOrchestrator.js'
@@ -29,6 +31,32 @@ import {
 
 const CAST_SIZES = [50, 200, 500, 1000, 2000]
 const LIVE_LOG_TAIL = 80   // most recent N events shown during running screen
+
+// Phase 6/6c — Sum live cost from a simulation snapshot. Aggregates the
+// tier1/tier2 decision usage + LLM distortion usage + dialogue costs that
+// the runner has accumulated so far in this run. Cheap, called once per yield.
+function computeSnapshotCost(snap) {
+  if (!snap) return 0
+  let total = 0
+  const tc = snap.tierCounters || {}
+  // Tier 1 (Haiku 4.5): $1 in / $5 out per 1M tokens
+  for (const u of (tc.tier1Usage || [])) {
+    total += ((u.input_tokens || 0) * 1 + (u.output_tokens || 0) * 5) / 1_000_000
+  }
+  // Tier 2 (Sonnet 4): $3 in / $15 out
+  for (const u of (tc.tier2Usage || [])) {
+    total += ((u.input_tokens || 0) * 3 + (u.output_tokens || 0) * 15) / 1_000_000
+  }
+  // Distortion usage (Sonnet)
+  for (const u of (snap.llmUsageAll || [])) {
+    total += ((u.input_tokens || 0) * 3 + (u.output_tokens || 0) * 15) / 1_000_000
+  }
+  // Dialogues (Sonnet) carry their own per-scene cost
+  for (const d of (snap.dialogues || [])) {
+    total += d.generationCost || 0
+  }
+  return total
+}
 
 // Phase 2 — Deep Simulation main UI
 //
@@ -82,6 +110,15 @@ export function DeepSimulation({
   // Phase 6/6b — opt-in toggle for persisting the butterfly trace with each
   // saved simulation. Off by default (trace can reach ~50MB at 1000 cast).
   const [preserveCausation, setPreserveCausation] = useState(false)
+  // Phase 6/6c — live cost tracker + tier counters surfaced in the running screen
+  const [liveCostUSD, setLiveCostUSD]         = useState(0)
+  const [liveTierCounters, setLiveTierCounters] = useState(null)
+  const [liveDialogueCount, setLiveDialogueCount] = useState(0)
+  const [runStartedAt, setRunStartedAt]       = useState(null)
+  const [scenarioContext, setScenarioContext] = useState(null)   // { variantIndex, variantCount } during scenario runs
+  // Estimate captured at run launch — pinned for post-run actual-vs-estimate compare
+  const [pinnedEstimate, setPinnedEstimate]   = useState(null)
+  const [actualRunCost, setActualRunCost]     = useState(null)
 
   // Scenario state (Phase 4b/4)
   const [scenarioRecord, setScenarioRecord] = useState(null)
@@ -101,6 +138,10 @@ export function DeepSimulation({
   const cancelRef                     = useRef(false)
   const pauseRef                      = useRef(false)
   const fullEventsRef                 = useRef([])
+  // Phase 6/6c — scenario per-variant cumulative costs so the live cost
+  // tracker doesn't drop when a new variant starts (each variant's
+  // tierCounters reset on its own runner instance).
+  const scenarioVariantCostsRef       = useRef([])
 
   // Final result
   const [finalSnapshot, setFinalSnapshot] = useState(null)
@@ -145,6 +186,18 @@ export function DeepSimulation({
   }, [project?.id])
 
   const boundCount = chars?.length || 0
+
+  // Phase 6/6c — live cost estimate, recomputed whenever inputs change
+  const costEstimate = useMemo(() => estimateRunCost({
+    castSize,
+    roundCount,
+    boundCharCount: boundCount,
+    hasHydration: !!hydrationData?.inferences,
+    knowledgeSeedingEnabled,
+    insightPanelsEnabled: false,    // 6d wires this on
+    variantCount: mode === 'scenario' ? variantCount : 1,
+    mode,
+  }), [castSize, roundCount, boundCount, hydrationData, knowledgeSeedingEnabled, mode, variantCount])
 
   // ── Stale taxonomy detection ──────────────────────────────────────────────
   const currentFingerprint = useMemo(
@@ -238,6 +291,14 @@ export function DeepSimulation({
     fullEventsRef.current = []
     setRound(0)
     setFinalSnapshot(null)
+    // Phase 6/6c — reset live counters + pin estimate for post-run compare
+    setLiveCostUSD(0)
+    setLiveTierCounters(null)
+    setLiveDialogueCount(0)
+    setRunStartedAt(Date.now())
+    setScenarioContext(null)
+    setPinnedEstimate(costEstimate)
+    setActualRunCost(null)
 
     // Phase 4a.1: compute seed BEFORE buildCensus so the census uses a
     // seeded RNG. Without this, the cast composition (which procedural
@@ -336,6 +397,10 @@ export function DeepSimulation({
         setRound(snap.round)
         setLiveEvents(snap.events.slice(-LIVE_LOG_TAIL))
         setAgentsLive(snap.agents)
+        // Phase 6/6c — surface live tier counters + running cost
+        setLiveTierCounters(snap.tierCounters)
+        setLiveDialogueCount((snap.dialogues || []).length)
+        setLiveCostUSD(computeSnapshotCost(snap))
         lastSnap = snap
         await new Promise(r => setTimeout(r, 30))   // visible animation
       }
@@ -384,6 +449,18 @@ export function DeepSimulation({
       console.error('Narrative summary failed:', err)
       setNarrativeError(err.message || String(err))
     }
+
+    // Phase 6/6c — actual run cost: live tier+dialogue+distortion cost
+    // (last value of liveCostUSD), plus narrative call, plus hydration and
+    // seeding if they ran this session.
+    const narrativeCostUSD = narrativeOut?.usage
+      ? ((narrativeOut.usage.input_tokens || 0) * 3 + (narrativeOut.usage.output_tokens || 0) * 15) / 1_000_000
+      : 0
+    const baseActual = computeSnapshotCost(lastSnap)
+    const actual = baseActual + narrativeCostUSD
+      + (hydrationCostInfo?.cost || 0)
+      + (hydrationCostInfo?.seedingCost || 0)
+    setActualRunCost(actual)
 
     // Build the run entry. Phase 3.5: split into full (file on disk) +
     // metadata stub (lives in project's deepSimulationHistory[]).
@@ -444,15 +521,26 @@ export function DeepSimulation({
   // path); the Scenario record stores variant IDs + comparison.
   const startScenarioRun = async () => {
     if (!taxonomy || boundCount === 0) return
+    cancelRef.current = false       // Phase 6/6c — reset cancel flag for new run
     setStep('scenario_running')
     setScenarioProgress({ phase: 'starting', variantIndex: 0, round: 0 })
     setScenarioRecord(null)
+    // Phase 6/6c — same live-state init as a progressive run
+    setLiveEvents([])
+    setLiveCostUSD(0)
+    setLiveTierCounters(null)
+    setLiveDialogueCount(0)
+    setRunStartedAt(Date.now())
+    setPinnedEstimate(costEstimate)
+    setActualRunCost(null)
+    setScenarioContext({ variantIndex: 0, variantCount })
+    scenarioVariantCostsRef.current = new Array(variantCount).fill(0)
 
     const baseSeed = hashSeed(`${project?.id || 'noproj'}|${castSize}|${roundCount}|${timeUnit}|scenario|${Date.now()}`)
     const wallStart = Date.now()
 
     try {
-      const { variants, failures } = await runScenario({
+      const { variants, failures, cancelled } = await runScenario({
         chars, lore, taxonomy,
         castSize, roundCount, timeUnit,
         censusMultiplier: CENSUS_MULTIPLIER,
@@ -462,9 +550,32 @@ export function DeepSimulation({
         difficulty,
         // Phase 6/6a-ii — scenario variants honour the same world rules
         worldRules: effectiveWorldRules,
-        onProgress: ({ variantIndex, round, roundCount: rc }) =>
-          setScenarioProgress({ phase: 'simulating', variantIndex, round, roundCount: rc }),
+        // Phase 6/6c — let the writer halt a scenario mid-flight
+        isCancelled: () => cancelRef.current,
+        onProgress: ({ variantIndex, round, roundCount: rc, snap, censusStats: cs }) => {
+          setScenarioProgress({ phase: 'simulating', variantIndex, round, roundCount: rc })
+          // Phase 6/6c — surface per-snapshot data to the live progress screen
+          if (snap) {
+            setRound(round)
+            setLiveEvents(snap.events.slice(-LIVE_LOG_TAIL))
+            setAgentsLive(snap.agents)
+            setLiveTierCounters(snap.tierCounters)
+            setLiveDialogueCount((snap.dialogues || []).length)
+            // Each variant tracks its own cumulative cost in the ref;
+            // liveCost = sum across all variants so the tracker never drops.
+            scenarioVariantCostsRef.current[variantIndex] = computeSnapshotCost(snap)
+            const total = scenarioVariantCostsRef.current.reduce((s, v) => s + (v || 0), 0)
+            setLiveCostUSD(total)
+            if (cs && !censusStats) setCensusStats(cs)
+            setScenarioContext({ variantIndex, variantCount })
+          }
+        },
       })
+      // Phase 6/6c — clean cancel halt (no error, no zombie state)
+      if (cancelled) {
+        setStep('setup')
+        return
+      }
       if (variants.length === 0) {
         // All variants failed — surface error and bail. Phase 4b.1.
         const errs = (failures || []).map(f => `v${f.variantIndex+1}: ${f.error}`).join('; ')
@@ -966,6 +1077,24 @@ export function DeepSimulation({
                 : 'Run Simulation →'}
         </button>
 
+        {/* Phase 6/6c — pre-launch cost estimate */}
+        {boundCount > 0 && taxonomy && (
+          <div style={{ marginTop: 8, fontSize: 11, color: C.muted, fontFamily: 'system-ui', textAlign: 'center' }}>
+            Estimated cost:{' '}
+            <span style={{ color: costEstimate.warn ? C.accBright : C.parch, fontWeight: 500 }}>
+              {formatEstimateRange(costEstimate)}
+            </span>
+            {' · mid ~'}<span style={{ color: C.parch }}>${costEstimate.midEstimate.toFixed(2)}</span>
+          </div>
+        )}
+
+        {costEstimate.warn && boundCount > 0 && taxonomy && (
+          <div style={{ marginTop: 10, padding: '10px 12px', backgroundColor: C.accBright + '12', border: `1px solid ${C.accBright}55`, borderRadius: 5, fontSize: 11, color: C.accBright, fontFamily: 'system-ui', lineHeight: 1.5 }}>
+            <strong>High-cost run.</strong> This configuration could cost up to ${costEstimate.highEstimate.toFixed(2)}.
+            Consider reducing cast size, round count, or variant count before running.
+          </div>
+        )}
+
         {(deepSimulationHistory || []).length > 0 && (
           <div style={{ marginTop: 24 }}>
             <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 8 }}>Past Runs</div>
@@ -1087,37 +1216,28 @@ export function DeepSimulation({
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // RUNNING
+  // RUNNING — Phase 6/6c live progress component
   // ─────────────────────────────────────────────────────────────────────────
   if (step === 'running') {
-    const pct = Math.round((round / Math.max(roundCount, 1)) * 100)
     return (
-      <div style={{ padding: 24, maxWidth: 760, margin: '0 auto', fontFamily: 'Georgia,serif' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16 }}>
-          <div>
-            <div style={{ fontSize: 15, color: C.purpleLight, fontWeight: 500 }}>Deep Simulation Running</div>
-            <div style={{ fontSize: 11, color: C.muted, fontFamily: 'system-ui', marginTop: 2 }}>
-              Round {round} of {roundCount} · {agentsLive.filter(a => a.alive).length}/{agentsLive.length} alive
-              {censusStats && ` · census ${censusStats.censusCount}`}
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button onClick={() => setPaused(p => !p)} style={btnSecondary}>{paused ? 'Resume' : 'Pause'}</button>
-            <button onClick={cancelRun} style={btnSecondary}>Cancel</button>
-          </div>
-        </div>
-
-        <div style={{ height: 4, backgroundColor: C.border, borderRadius: 2, marginBottom: 20, overflow: 'hidden' }}>
-          <div style={{ width: `${pct}%`, height: '100%', backgroundColor: paused ? C.gold : C.purple, transition: 'width 0.2s ease' }} />
-        </div>
-
-        <div style={{ backgroundColor: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 6, padding: 12, maxHeight: 460, overflow: 'auto' }}>
-          <div style={{ fontSize: 9, color: C.muted, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>
-            Latest events {liveEvents.length} of {fullEventsRef.current.length}
-          </div>
-          <EventLog events={liveEvents} emptyText="Round 1 still computing — events will start streaming when something happens." />
-        </div>
-      </div>
+      <SimulationProgress
+        round={round}
+        roundCount={roundCount}
+        agentsAlive={agentsLive.filter(a => a.alive).length}
+        agentsTotal={agentsLive.length}
+        censusStats={censusStats}
+        events={liveEvents}
+        tierCounters={liveTierCounters}
+        dialogueCount={liveDialogueCount}
+        hydrationCallsUsed={hydrationCostInfo?.callsUsed || 0}
+        paused={paused}
+        onPause={() => setPaused(p => !p)}
+        onCancel={cancelRun}
+        startedAt={runStartedAt}
+        liveCostUSD={liveCostUSD}
+        estimate={pinnedEstimate}
+        scenarioContext={scenarioContext}
+      />
     )
   }
 
@@ -1138,16 +1258,39 @@ export function DeepSimulation({
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // SCENARIO RUNNING (Phase 4b/4)
+  // SCENARIO RUNNING (Phase 4b/4 + Phase 6/6c live experience)
   // ─────────────────────────────────────────────────────────────────────────
   if (step === 'scenario_running') {
     const p = scenarioProgress || {}
+    // While a variant is actively simulating, show the live progress UI.
+    if (p.phase === 'simulating') {
+      return (
+        <SimulationProgress
+          round={round}
+          roundCount={roundCount}
+          agentsAlive={agentsLive.filter(a => a.alive).length}
+          agentsTotal={agentsLive.length}
+          censusStats={censusStats}
+          events={liveEvents}
+          tierCounters={liveTierCounters}
+          dialogueCount={liveDialogueCount}
+          hydrationCallsUsed={hydrationCostInfo?.callsUsed || 0}
+          paused={false}
+          onPause={() => {}}        // pause not supported across variants — would desync seeds
+          onCancel={cancelRun}
+          startedAt={runStartedAt}
+          liveCostUSD={liveCostUSD}
+          estimate={pinnedEstimate}
+          scenarioContext={scenarioContext}
+        />
+      )
+    }
+    // Other phases (starting / narrating / comparing / error) keep the spinner.
     return (
       <div style={{ padding: 48, maxWidth: 620, margin: '0 auto', textAlign: 'center', fontFamily: 'Georgia,serif' }}>
         <div style={{ fontSize: 16, color: C.purpleLight, marginBottom: 6 }}>Scenario Running</div>
         <div style={{ fontSize: 11, color: C.muted, fontFamily: 'system-ui', marginBottom: 24 }}>
-          {p.phase === 'simulating' ? `Variant ${(p.variantIndex ?? 0) + 1} of ${variantCount} — round ${p.round || 0} of ${p.roundCount || roundCount}`
-            : p.phase === 'narrating' ? 'Generating per-variant chronicles…'
+          {p.phase === 'narrating' ? 'Generating per-variant chronicles…'
             : p.phase === 'comparing' ? 'Synthesising cross-variant comparison…'
             : p.phase === 'starting'  ? 'Initialising variants…'
             : p.phase === 'error'     ? `Failed: ${p.error}`
@@ -1190,6 +1333,8 @@ export function DeepSimulation({
     narrative={narrative}
     narrativeError={narrativeError}
     onNewSimulation={newSimulation}
+    actualCost={actualRunCost}
+    estimate={pinnedEstimate}
   />
 }
 
@@ -1203,7 +1348,7 @@ const RESULT_TABS = [
   { id: 'causation',  label: 'Causation'  },
 ]
 
-function ResultsScreen({ project, simulationResult, narrative, narrativeError, onNewSimulation }) {
+function ResultsScreen({ project, simulationResult, narrative, narrativeError, onNewSimulation, actualCost = null, estimate = null }) {
   const [tab, setTab] = useState('chronicle')
   const summary       = simulationResult?.summary
   const dialogues     = simulationResult?.dialogues || []
@@ -1211,6 +1356,9 @@ function ResultsScreen({ project, simulationResult, narrative, narrativeError, o
   const censusStats   = simulationResult?.censusStats
   const roundCount    = simulationResult?.roundCount
   const timeUnit      = simulationResult?.timeUnit
+
+  // Phase 6/6c — compare actual to pre-launch estimate
+  const costCompare = compareActualToEstimate(actualCost, estimate)
 
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto', fontFamily: 'Georgia,serif' }}>
@@ -1221,6 +1369,17 @@ function ResultsScreen({ project, simulationResult, narrative, narrativeError, o
           <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', marginTop: 2 }}>
             {censusStats ? `${censusStats.activeCastCount} cast (${censusStats.boundCount} bound + ${censusStats.activeCastCount - censusStats.boundCount} procedural) · census ${censusStats.censusCount}` : 'agents'} · {roundCount} {timeUnit}-rounds · progressive mode
           </div>
+          {Number.isFinite(actualCost) && estimate && (
+            <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', marginTop: 4 }}>
+              Cost: <span style={{ color: C.parch, fontWeight: 500 }}>${actualCost.toFixed(4)}</span>
+              {' '}·{' '}estimated <span style={{ color: C.parch }}>{formatEstimateRange(estimate)}</span>
+              {costCompare && (
+                <span style={{ color: costCompare.status === 'over' ? C.accBright : costCompare.status === 'under' ? C.green : C.mutedLight, marginLeft: 6 }}>
+                  ({costCompare.status === 'within' ? 'within range' : costCompare.status === 'under' ? 'under estimate' : 'over estimate'}, {costCompare.pct}% of mid)
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <button onClick={onNewSimulation} style={btnSecondary}>New Simulation</button>
       </div>
