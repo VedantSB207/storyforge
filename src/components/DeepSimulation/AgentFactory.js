@@ -19,10 +19,21 @@ const splitSecrets = (s) =>
     .map(t => t.trim())
     .filter(Boolean)
 
-export function createAgentFromBibleCharacter(char) {
+// Phase 6/6a-i: optional hydration param applies Bible-inference results
+// (age, status, location, backgroundSummary) and seeded bonds + Knowledge.
+// When absent, falls back to the Phase 1 defaults exactly as before.
+export function createAgentFromBibleCharacter(char, hydration = null, seededKnowledge = null) {
+  const agentId   = `agent_${char.id}`
+  // Effective inference = inference + writer edits from Hydration Review
+  const eff       = hydration?.effective?.[agentId] || hydration?.inferences?.[agentId] || null
+  const seededBonds = hydration?.bondsByAgentId?.[agentId] || null
+  const status    = (eff?.status || 'alive').toLowerCase()
+  const isActive  = (status === 'alive' || status === 'dormant')
+  const isOffstage = (status === 'missing' || status === 'exiled' || status === 'dormant')
+
   return {
     // Layer 1 — Identity
-    id:        `agent_${char.id}`,
+    id:        agentId,
     name:      char.name || 'Unnamed',
     source:    'bound',
     bibleId:   char.id,
@@ -30,7 +41,7 @@ export function createAgentFromBibleCharacter(char) {
     isUnique:  false,             // editable in Phase 2
 
     // Layer 2 — Body and time
-    age:            30,           // writer can adjust later
+    age:            (eff?.age?.value ?? 30),
     lifeExpectancy: 80,
     health:         1.0,
     conditions:    [],
@@ -59,21 +70,23 @@ export function createAgentFromBibleCharacter(char) {
     goals: [],
     longTermAspiration: '',
 
-    // Layer 5 — Bonds (Phase 4a populates bonds map; relationships kept
-    // for back-compat with any external consumer)
+    // Layer 5 — Bonds: hydration seeds bonds from the Relationship Web.
+    // SimulationRunner threads `seededBonds` here from hydrationData.
     relationships: {},
-    bonds:         {},
+    bonds:         seededBonds ? { ...seededBonds } : {},
     factions:      [],
 
-    // Layer 6 — Knowledge (empty Phase 1)
-    knownFacts:      [],
+    // Layer 6 — Knowledge: hydration seeds initial Knowledge from the
+    // character's profile + chapters (knowledgeSeeder.js, optional).
+    knownFacts:      Array.isArray(seededKnowledge) ? [...seededKnowledge] : [],
     secrets:         splitSecrets(char.secrets),
     memoryDecayRate: 0.1,
 
-    // Layer 7 — Position (assigned by positionGraph at runner init)
-    region:   'unknown',          // Phase 3: filled by initialisePositions
+    // Layer 7 — Position. Hydration sets initial region from the inference;
+    // positionGraph can still override unknowns at runner init.
+    region:   eff?.location || 'unknown',
     location: {
-      region: 'unknown',
+      region: eff?.location || 'unknown',
       town:   'unknown',
       place:  'unknown',
     },
@@ -86,8 +99,16 @@ export function createAgentFromBibleCharacter(char) {
     stress:           0,
     trustDisposition: 0.5,
 
-    // Phase 1 lifecycle helper
-    alive: true,
+    // Phase 1 lifecycle helper. Status-aware: 'dead' agents are
+    // immediately marked alive=false (also excluded from active cast by
+    // the runner); 'missing'/'exiled'/'dormant' stay alive but flagged
+    // offstage so decisionLogic/witnessRules can filter them.
+    alive: status !== 'dead',
+
+    // Phase 6 hydration markers used by decisionLogic + witnessRules
+    status:           status,
+    isOffstage:       isOffstage,
+    backgroundSummary: eff?.backgroundSummary || '',
 
     // Internal flag set: lets us avoid re-firing the same need_critical event
     // every round once a need is already below threshold
@@ -99,6 +120,10 @@ export function createAgentFromBibleCharacter(char) {
   }
 }
 
-export function createAgentsFromBible(chars = []) {
-  return (chars || []).map(createAgentFromBibleCharacter)
+export function createAgentsFromBible(chars = [], hydration = null, knowledgeByAgentId = null) {
+  return (chars || []).map(c => {
+    const agentId = `agent_${c.id}`
+    const seeded = knowledgeByAgentId?.[agentId] || null
+    return createAgentFromBibleCharacter(c, hydration, seeded)
+  })
 }

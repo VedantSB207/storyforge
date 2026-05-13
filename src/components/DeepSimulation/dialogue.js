@@ -108,7 +108,7 @@ function describeKnowledgeAbout(viewer, subject) {
 
 // Generate dialogue for one event. Returns { id, round, eventId, participants,
 // lines, category, generationCost, usage } or null on failure.
-export async function generateDialogue({ event, participants, agentById, simId, dialogueIdx }) {
+export async function generateDialogue({ event, participants, agentById, simId, dialogueIdx, storySnapshot = null }) {
   const [a, b] = participants
   const bondAB = a.bonds?.[b.id]
   const bondBA = b.bonds?.[a.id]
@@ -117,7 +117,9 @@ export async function generateDialogue({ event, participants, agentById, simId, 
 
   const userContent =
     `Two characters at a charged moment in a fiction simulation.\n\n` +
+    (storySnapshot ? `Story state at the start of this simulation:\n"${storySnapshot}"\n\n` : '') +
     `${a.name}:\n` +
+    (a.backgroundSummary ? `  background: ${a.backgroundSummary}\n` : '') +
     `  traits: ${(a.traits || []).slice(0, 5).join(', ') || '—'}\n` +
     `  values: ${(a.values || []).slice(0, 3).join(', ') || '—'}\n` +
     `  fears: ${(a.fears || []).slice(0, 3).join(', ') || '—'}\n` +
@@ -125,6 +127,7 @@ export async function generateDialogue({ event, participants, agentById, simId, 
     `  ${a.name}'s view of ${b.name}: bond type ${bondAB?.type || 'unknown'}, intensity ${(bondAB?.intensity ?? 0).toFixed(2)}, trust ${(bondAB?.trust ?? 0).toFixed(2)}\n` +
     `  what ${a.name} thinks they know about ${b.name}: ${aKnowledgeOfB ? `"${aKnowledgeOfB.content}" (confidence ${aKnowledgeOfB.confidence?.toFixed(2)})` : 'no specific knowledge'}\n\n` +
     `${b.name}:\n` +
+    (b.backgroundSummary ? `  background: ${b.backgroundSummary}\n` : '') +
     `  traits: ${(b.traits || []).slice(0, 5).join(', ') || '—'}\n` +
     `  values: ${(b.values || []).slice(0, 3).join(', ') || '—'}\n` +
     `  fears: ${(b.fears || []).slice(0, 3).join(', ') || '—'}\n` +
@@ -134,13 +137,19 @@ export async function generateDialogue({ event, participants, agentById, simId, 
     `The moment: round ${event.round}, ${event.category}: "${event.content}"\n\n` +
     `Generate a brief 4-8 line dialogue scene between ${a.name} and ${b.name} in this moment. Honor the asymmetry of what each knows. Return JSON only.`
 
+  // Phase 6/6a-i: weave story snapshot into system prompt so the dialogue
+  // honours the writer's current story moment.
+  const systemPrompt = storySnapshot
+    ? `${SYSTEM_PROMPT}\n\nThe writer's story currently sits at this moment:\n"${storySnapshot}"\n\nThe scene below takes place AFTER this moment. Dialogue should be consistent with what the characters know and feel given this story state.`
+    : SYSTEM_PROMPT
+
   let res
   try {
     res = await callClaude({
       model:       DIALOGUE_MODEL,
       max_tokens:  DIALOGUE_MAX_TOKENS,
       temperature: DIALOGUE_TEMPERATURE,
-      system:      SYSTEM_PROMPT,
+      system:      systemPrompt,
       messages:    [{ role: 'user', content: userContent }],
     })
   } catch (err) {
@@ -173,7 +182,7 @@ export async function generateDialogue({ event, participants, agentById, simId, 
 }
 
 // Generate all candidates in parallel. Returns array of dialogue objects.
-export async function generateDialogues({ candidates, agentById, simId = '' }) {
+export async function generateDialogues({ candidates, agentById, simId = '', storySnapshot = null }) {
   if (!candidates || candidates.length === 0) return []
   const results = await Promise.all(
     candidates.map((c, i) => generateDialogue({
@@ -182,6 +191,7 @@ export async function generateDialogues({ candidates, agentById, simId = '' }) {
       agentById,
       simId,
       dialogueIdx:  i,
+      storySnapshot,
     }))
   )
   return results.filter(Boolean)

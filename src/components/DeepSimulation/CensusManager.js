@@ -26,16 +26,22 @@ export function buildCensus({
   castSize,
   censusMultiplier = CENSUS_MULTIPLIER,
   rng = Math.random,
+  // Phase 6/6a-i — hydration + seeded knowledge
+  hydration = null,
+  seededKnowledgeByAgentId = null,
 }) {
-  const boundAgents      = createAgentsFromBible(chars || [])
+  const boundAgents      = createAgentsFromBible(chars || [], hydration, seededKnowledgeByAgentId)
   const proceduralAgents = generateNPCs({ taxonomy, castSize, censusMultiplier, rng })
   const census           = [...boundAgents, ...proceduralAgents]
 
   // Active cast = all bound + procedural sampled by relevance.
-  // Phase 2 relevance = random uniform; bound agents always in.
-  const proceduralSlots = Math.max(0, castSize - boundAgents.length)
+  // Phase 6/6a-i: exclude dead bound chars from active cast (they don't act).
+  // Missing/exiled/dormant bound chars stay in the cast — they're offstage but
+  // their bonds persist and others can reference them.
+  const liveBound       = boundAgents.filter(a => a.alive)
+  const proceduralSlots = Math.max(0, castSize - liveBound.length)
   const sampled         = sampleProceduralByRelevance(proceduralAgents, proceduralSlots, rng)
-  const activeCast      = [...boundAgents, ...sampled]
+  const activeCast      = [...liveBound, ...sampled]
 
   return {
     boundAgents,

@@ -13,6 +13,11 @@ import { CharacterThreads } from './CharacterThreads.jsx'
 import { MapView } from './MapView.jsx'
 import { BondNetwork } from './BondNetwork.jsx'
 import { ButterflyTraceView } from './ButterflyTraceView.jsx'
+// Phase 6/6a-i — hydration pipeline
+import { HydrationReview } from './hydration/HydrationReview.jsx'
+import { runHydration, effectiveInference } from './hydration/hydrationOrchestrator.js'
+import { seedAllCharacterKnowledge } from './hydration/knowledgeSeeder.js'
+import { getActiveSnapshot } from './hydration/storySnapshot.js'
 import {
   saveSimResult,
   loadSimResult,
@@ -37,9 +42,13 @@ export function DeepSimulation({
   chars,
   lore = [],
   timelineChapters = [],
+  relationships = [],
   deepSimulationHistory = [],
   setDeepSimulationHistory,
   setTab,
+  storySnapshot = '',
+  hydrationData = null,
+  setHydrationData = () => {},
 }) {
   const [step, setStep]               = useState('setup')
   const [mode, setMode]               = useState('progressive')
@@ -48,6 +57,17 @@ export function DeepSimulation({
   const [timeUnit, setTimeUnit]       = useState('year')
   const [difficulty, setDifficulty]   = useState(DIFFICULTY_DEFAULT)   // Phase 5 pre-fix
   const [variantCount, setVariantCount] = useState(3)   // Phase 4b/4 — scenario only
+
+  // Phase 6/6a-i — hydration state + per-sim story snapshot + knowledge seeding toggle
+  const [hydrationRunning, setHydrationRunning] = useState(false)
+  const [hydrationError, setHydrationError]     = useState('')
+  const [hydrationProgress, setHydrationProgress] = useState(null)
+  const [pendingHydration, setPendingHydration]   = useState(null) // draft of hydrationData while reviewing
+  const [simSnapshotMode, setSimSnapshotMode]     = useState('project')  // 'project' | 'custom'
+  const [simSnapshotText, setSimSnapshotText]     = useState('')
+  const [knowledgeSeedingEnabled, setKnowledgeSeedingEnabled] = useState(true)
+  const [confirmDisableSeeding, setConfirmDisableSeeding]     = useState(false)
+  const [hydrationCostInfo, setHydrationCostInfo] = useState(null)
 
   // Scenario state (Phase 4b/4)
   const [scenarioRecord, setScenarioRecord] = useState(null)
@@ -138,9 +158,62 @@ export function DeepSimulation({
     }
   }
 
+  // ── Phase 6/6a-i: hydration helpers ────────────────────────────────────
+  // Determine whether hydration is needed. We re-hydrate when:
+  //   - hydrationData is null (project never hydrated)
+  //   - Any bound character's profile hash has changed since last hydration
+  const needsHydration = (() => {
+    if (!hydrationData?.inferences) return true
+    for (const c of chars) {
+      const agentId = `agent_${c.id}`
+      const cached = hydrationData.inferences[agentId]
+      if (!cached) return true
+    }
+    return false
+  })()
+
+  // worldRulesText is currently the project lore joined as a single string.
+  // Phase 6/6a-ii will replace this with the dedicated World Rules panel.
+  const worldRulesText = (lore || []).map(r => `[${r.cat || 'Rule'}] ${r.rule || ''}`).join('\n').slice(0, 4000)
+
+  // Run hydration pipeline. Used both for first-run and "re-run inference".
+  const runHydrationPipeline = async () => {
+    setHydrationRunning(true)
+    setHydrationError('')
+    setHydrationProgress({ stage: 'starting', name: '' })
+    try {
+      const result = await runHydration({
+        chars, relationships, worldRulesText,
+        cachedHydration: hydrationData,
+        onProgress: (e) => setHydrationProgress(e),
+      })
+      setPendingHydration(result.hydrationData)
+      setHydrationCostInfo({ cost: result.cost, callsUsed: result.callsUsed, errors: result.errors })
+      setStep('hydration_review')
+    } catch (err) {
+      setHydrationError(err.message || String(err))
+    } finally {
+      setHydrationRunning(false)
+    }
+  }
+
+  // Apply the reviewed hydration data → persist to project + proceed
+  const confirmHydration = () => {
+    if (pendingHydration) {
+      setHydrationData(pendingHydration)
+    }
+    setStep('setup')
+  }
+
   // ── Run simulation ────────────────────────────────────────────────────────
   const startRun = async () => {
     if (!taxonomy || boundCount === 0) return
+    // Phase 6/6a-i: gate sim start on hydration. Re-run inference when
+    // the project hasn't been hydrated yet (or a profile changed).
+    if (needsHydration) {
+      await runHydrationPipeline()
+      return
+    }
     cancelRef.current = false
     pauseRef.current  = false
     setPaused(false)
@@ -156,13 +229,55 @@ export function DeepSimulation({
     // deterministic even when the round-loop seed is fixed.
     const seed = hashSeed(`${project?.id || 'noproj'}|${castSize}|${roundCount}|${timeUnit}|${Date.now()}`)
 
-    // Build census + active cast from taxonomy (deterministic given seed)
+    // Build the effective hydration view (inferences + writer edits)
+    const effectiveHydration = (() => {
+      if (!hydrationData?.inferences) return null
+      const effective = {}
+      for (const c of chars) {
+        const eff = effectiveInference(hydrationData, `agent_${c.id}`)
+        if (eff) effective[`agent_${c.id}`] = eff
+      }
+      return { ...hydrationData, effective }
+    })()
+
+    // Phase 6/6a-i: optionally seed Knowledge before census build so bound
+    // agents enter the runner with their seeded knowledge in place.
+    let seededKnowledgeByAgentId = null
+    if (knowledgeSeedingEnabled) {
+      setStep('seeding_knowledge')
+      try {
+        const seedRes = await seedAllCharacterKnowledge({
+          chars, worldRulesText,
+          onProgress: (e) => setHydrationProgress({ stage: 'seeding', ...e }),
+        })
+        seededKnowledgeByAgentId = seedRes.knowledgeByAgentId
+        setHydrationCostInfo(prev => ({
+          ...(prev || {}),
+          seedingCost: seedRes.totalCost,
+          seedingCallsUsed: seedRes.callsUsed,
+        }))
+      } catch (err) {
+        console.warn('Knowledge seeding failed, continuing without seeded knowledge:', err)
+      }
+      setStep('running')
+    }
+
+    // Active story snapshot for this run
+    const activeSnapshot = getActiveSnapshot(
+      { storySnapshot },
+      { simSnapshotEnabled: simSnapshotMode === 'custom', simSnapshot: simSnapshotText }
+    )
+
+    // Build census + active cast from taxonomy (deterministic given seed).
+    // Bound agents get rebuilt with hydration applied before census.
     const built = buildCensus({
       chars,
       taxonomy,
       castSize,
       censusMultiplier: CENSUS_MULTIPLIER,
       rng: makeSeededRng(seed),
+      hydration: effectiveHydration,
+      seededKnowledgeByAgentId,
     })
     setAgentsLive(built.activeCast)
     setCensusStats(built.stats)
@@ -185,6 +300,10 @@ export function DeepSimulation({
         seed,
         // Phase 5 pre-fix
         difficulty,
+        // Phase 6/6a-i
+        hydration: effectiveHydration,
+        storySnapshot: activeSnapshot,
+        seededKnowledgeByAgentId,
       })
 
       for await (const snap of gen) {
@@ -236,6 +355,7 @@ export function DeepSimulation({
         censusStats: built.stats,
         roundCount,
         timeUnit,
+        storySnapshot: activeSnapshot,
       })
       setNarrative(narrativeOut)
     } catch (err) {
@@ -575,6 +695,106 @@ export function DeepSimulation({
           </div>
         </Section>
 
+        {/* Phase 6/6a-i — Story snapshot mode */}
+        <Section label="Story snapshot">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', padding: '6px 0' }}>
+              <input type="radio" name="snapshotMode" checked={simSnapshotMode === 'project'} onChange={() => setSimSnapshotMode('project')} style={{ marginTop: 3 }} />
+              <div>
+                <div style={{ fontSize: 12, color: simSnapshotMode === 'project' ? C.parch : C.mutedLight, fontFamily: 'system-ui' }}>Use project snapshot</div>
+                <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', fontStyle: 'italic', lineHeight: 1.5, marginTop: 2 }}>
+                  This simulation uses the story state defined in your Story Bible. All simulations from this project share the same starting moment. Best for exploring multiple possibilities from a fixed point in your story.
+                </div>
+                {simSnapshotMode === 'project' && storySnapshot && (
+                  <div style={{ marginTop: 6, padding: '6px 10px', fontSize: 11, color: C.parch, backgroundColor: C.bgElevated, border: `1px solid ${C.border}`, borderRadius: 3, fontFamily: 'Georgia, serif', fontStyle: 'italic', lineHeight: 1.5 }}>
+                    {storySnapshot.slice(0, 240)}{storySnapshot.length > 240 ? '…' : ''}
+                  </div>
+                )}
+                {simSnapshotMode === 'project' && !storySnapshot && (
+                  <div style={{ marginTop: 6, fontSize: 10, color: C.gold, fontFamily: 'system-ui' }}>
+                    No project snapshot set yet — edit it in Story Bible &gt; Story State.
+                  </div>
+                )}
+              </div>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', padding: '6px 0' }}>
+              <input type="radio" name="snapshotMode" checked={simSnapshotMode === 'custom'} onChange={() => { setSimSnapshotMode('custom'); if (!simSnapshotText) setSimSnapshotText(storySnapshot) }} style={{ marginTop: 3 }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, color: simSnapshotMode === 'custom' ? C.parch : C.mutedLight, fontFamily: 'system-ui' }}>Use custom for this run</div>
+                <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', fontStyle: 'italic', lineHeight: 1.5, marginTop: 2 }}>
+                  Enter a different story state just for this simulation. Best for exploring "what if my story were at a different moment" or comparing how events unfold from different starting points.
+                </div>
+                {simSnapshotMode === 'custom' && (
+                  <textarea
+                    value={simSnapshotText}
+                    onChange={e => setSimSnapshotText(e.target.value)}
+                    placeholder="Describe the story state for this run…"
+                    style={{ marginTop: 6, width: '100%', minHeight: 80, padding: '8px 10px', backgroundColor: C.bg, color: C.parch, border: `1px solid ${C.borderMid}`, borderRadius: 4, fontSize: 12, fontFamily: 'Georgia,serif', lineHeight: 1.5, outline: 'none', boxSizing: 'border-box', resize: 'vertical' }}
+                  />
+                )}
+              </div>
+            </label>
+          </div>
+        </Section>
+
+        {/* Phase 6/6a-i — Knowledge seeding toggle */}
+        <Section label="Character knowledge">
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', padding: '6px 0' }}>
+            <input type="checkbox" checked={knowledgeSeedingEnabled}
+              onChange={(e) => {
+                if (!e.target.checked) { setConfirmDisableSeeding(true) }
+                else                   { setKnowledgeSeedingEnabled(true) }
+              }}
+              style={{ marginTop: 3 }} />
+            <div>
+              <div style={{ fontSize: 12, color: knowledgeSeedingEnabled ? C.parch : C.mutedLight, fontFamily: 'system-ui' }}>
+                Seed character knowledge from your story{' '}
+                <span style={{ fontSize: 10, color: C.muted, fontStyle: 'italic' }}>(recommended, ~$0.10–0.15 per simulation)</span>
+              </div>
+              <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', fontStyle: 'italic', lineHeight: 1.5, marginTop: 2 }}>
+                {knowledgeSeedingEnabled
+                  ? 'Each bound character starts with 5–8 facts from their profile. The simulation continues your story.'
+                  : 'Characters start with no memory of your existing story. The simulation may produce scenes that contradict events you have already written.'}
+              </div>
+            </div>
+          </label>
+          {confirmDisableSeeding && (
+            <div style={{ marginTop: 10, padding: '12px 14px', backgroundColor: C.bgCard, border: `1px solid ${C.gold}55`, borderRadius: 5, fontSize: 11, fontFamily: 'system-ui', color: C.parch }}>
+              <div style={{ fontWeight: 'bold', marginBottom: 6 }}>Are you sure you want to disable knowledge seeding?</div>
+              <div style={{ marginBottom: 6 }}>
+                <strong style={{ color: C.green }}>With it ON:</strong> Each bound character knows what your story says they know — past events they witnessed, secrets they hold. The simulation continues your story. Costs ~$0.10–0.15 per simulation.
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                <strong style={{ color: C.accBright }}>With it OFF:</strong> Characters start with no memory of your existing story. The simulation may produce scenes that contradict events you have already written. Best for "alternate universe" exploration. Saves ~$0.10–0.15 per simulation.
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={() => { setKnowledgeSeedingEnabled(true); setConfirmDisableSeeding(false) }} style={{ padding: '6px 12px', backgroundColor: C.purple, color: '#fff', border: 'none', borderRadius: 3, fontSize: 11, fontFamily: 'system-ui', cursor: 'pointer' }}>Keep it on</button>
+                <button onClick={() => { setKnowledgeSeedingEnabled(false); setConfirmDisableSeeding(false) }} style={{ padding: '6px 12px', backgroundColor: 'transparent', color: C.muted, border: `1px solid ${C.border}`, borderRadius: 3, fontSize: 11, fontFamily: 'system-ui', cursor: 'pointer' }}>Turn it off</button>
+              </div>
+            </div>
+          )}
+        </Section>
+
+        {/* Phase 6/6a-i — Hydration status banner */}
+        {hydrationData?.inferences ? (
+          <div style={{ padding: '8px 12px', marginBottom: 12, backgroundColor: C.green + '10', border: `1px solid ${C.green}33`, borderRadius: 5, fontSize: 11, fontFamily: 'system-ui', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <span style={{ color: C.green, marginRight: 6 }}>✓</span>
+              <span style={{ color: C.mutedLight }}>Story hydrated — {Object.keys(hydrationData.inferences).length} characters inferred · {hydrationData.bondsSummary?.length || 0} bonds seeded</span>
+            </div>
+            <button onClick={runHydrationPipeline} style={{ fontSize: 10, color: C.purpleLight, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'system-ui', textDecoration: 'underline' }}>Re-review</button>
+          </div>
+        ) : (
+          <div style={{ padding: '8px 12px', marginBottom: 12, backgroundColor: C.gold + '12', border: `1px solid ${C.gold}44`, borderRadius: 5, fontSize: 11, fontFamily: 'system-ui', color: C.gold }}>
+            ⚠ This project has not been hydrated yet. Clicking Run will read each character's profile via Claude (~$0.11–0.22 one-time, cached after).
+          </div>
+        )}
+        {hydrationError && (
+          <div style={{ padding: '8px 12px', marginBottom: 12, backgroundColor: C.accBright + '12', border: `1px solid ${C.accBright}44`, borderRadius: 5, fontSize: 11, color: C.accBright, fontFamily: 'system-ui' }}>
+            Hydration error: {hydrationError}
+          </div>
+        )}
+
         {/* Taxonomy step */}
         <Section label="World Taxonomy">
           {taxonomyError && (
@@ -692,6 +912,54 @@ export function DeepSimulation({
   // ─────────────────────────────────────────────────────────────────────────
   // TAXONOMY LOADING
   // ─────────────────────────────────────────────────────────────────────────
+  // Phase 6/6a-i: Hydration loading & review screens
+  if (hydrationRunning && step !== 'hydration_review') {
+    return (
+      <div style={{ padding: 48, maxWidth: 560, margin: '0 auto', textAlign: 'center', fontFamily: 'Georgia,serif' }}>
+        <div style={{ fontSize: 15, color: C.purpleLight, marginBottom: 6 }}>Setting up the story…</div>
+        <div style={{ fontSize: 11, color: C.muted, fontFamily: 'system-ui', marginBottom: 24 }}>
+          {hydrationProgress?.stage === 'inference'
+            ? `Reading ${hydrationProgress?.name || ''} (${hydrationProgress?.status || 'inferring'})`
+            : hydrationProgress?.stage === 'mapping'
+            ? 'Mapping the Relationship Web to initial bonds…'
+            : 'Working…'}
+        </div>
+        <div style={{ display: 'inline-block', width: 28, height: 28, border: `2px solid ${C.purple}33`, borderTopColor: C.purpleLight, borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    )
+  }
+
+  if (step === 'hydration_review') {
+    return (
+      <HydrationReview
+        hydrationData={pendingHydration}
+        setHydrationData={setPendingHydration}
+        chars={chars}
+        bondsSummary={pendingHydration?.bondsSummary || []}
+        onConfirm={confirmHydration}
+        onRerun={runHydrationPipeline}
+        onCancel={() => setStep('setup')}
+        rerunning={hydrationRunning}
+      />
+    )
+  }
+
+  if (step === 'seeding_knowledge') {
+    return (
+      <div style={{ padding: 48, maxWidth: 560, margin: '0 auto', textAlign: 'center', fontFamily: 'Georgia,serif' }}>
+        <div style={{ fontSize: 15, color: C.purpleLight, marginBottom: 6 }}>Seeding character knowledge…</div>
+        <div style={{ fontSize: 11, color: C.muted, fontFamily: 'system-ui', marginBottom: 24 }}>
+          {hydrationProgress?.stage === 'seeding' && hydrationProgress?.name
+            ? `Reading what ${hydrationProgress.name} knows at story start…`
+            : 'Pre-loading character knowledge from your story.'}
+        </div>
+        <div style={{ display: 'inline-block', width: 28, height: 28, border: `2px solid ${C.purple}33`, borderTopColor: C.purpleLight, borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    )
+  }
+
   if (step === 'taxonomy_loading') {
     return (
       <div style={{ padding: 48, maxWidth: 560, margin: '0 auto', textAlign: 'center', fontFamily: 'Georgia,serif' }}>

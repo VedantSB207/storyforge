@@ -62,6 +62,9 @@ export function computeWitnesses(event, agents, positionState, rng = Math.random
   for (const a of agents) {
     if (a === originAgent) continue
     if (!a.alive) continue
+    // Phase 6/6a-i: offstage (missing/exiled) agents don't witness events
+    // — they're not physically present in the action. Dormant still witness.
+    if (a.isOffstage && a.status !== 'dormant') continue
     let prob
     const d = distance(originAgent, a, positionState)
     if (d === 0)        prob = WITNESS_PROB_SAME_REGION

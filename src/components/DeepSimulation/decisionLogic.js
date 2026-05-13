@@ -265,6 +265,17 @@ export async function decideRoundBatched({ agents, world, rng, callCounters }) {
   // Pass 1: classify + resolve Tier 0
   for (const agent of agents) {
     if (!agent.alive) continue
+    // Phase 6/6a-i: status-aware filtering. Offstage agents (missing/exiled)
+    // don't take actions — they exist for bond persistence + Knowledge but
+    // can't act. Dormant agents act rarely (~1/4 the usual rate).
+    if (agent.isOffstage && agent.status !== 'dormant') {
+      decisions[agent.id] = { action: 'OBSERVE', tier: 'tier0', reasoning: 'offstage' }
+      continue
+    }
+    if (agent.status === 'dormant' && rng() > 0.25) {
+      decisions[agent.id] = { action: 'OBSERVE', tier: 'tier0', reasoning: 'dormant_skip' }
+      continue
+    }
     const available = availableActions(agent, world)
     if (available.length === 0) {
       decisions[agent.id] = { action: 'OBSERVE', tier: 'tier0', reasoning: 'no_actions_available' }

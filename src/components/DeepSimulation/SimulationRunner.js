@@ -61,14 +61,33 @@ export async function* runSimulationRounds({
   disableLLM = false,
   // Phase 5 pre-fix: difficulty preset for needs depletion pacing.
   difficulty = 'standard',
+  // Phase 6/6a-i: hydration data (inferences + bonds), story snapshot,
+  // and pre-seeded Knowledge entries. Runner threads them through to the
+  // prompts and into agent state at the same point it would have started
+  // from defaults.
+  hydration = null,
+  storySnapshot = null,
+  seededKnowledgeByAgentId = null,
 }) {
   const effectiveRng = seed != null ? makeSeededRng(seed) : rng
-  let agents = initialAgents.map(a => ({
-    ...a,
-    knownFacts:    [],
-    bonds:         {},
-    actionHistory: [],
-  }))
+  let agents = initialAgents.map(a => {
+    const agentId = a.id
+    // Phase 6/6a-i: hydration preserves bonds + knownFacts from the seed.
+    // Without hydration, fall back to Phase 4a behaviour (empty bonds/knowledge).
+    const seedBonds = (hydration?.bondsByAgentId?.[agentId]) || {}
+    const seedKnowledge = (seededKnowledgeByAgentId?.[agentId]) || []
+    // For bound agents that came in pre-hydrated (status flags + bonds + knowledge
+    // are on the agent already), DO NOT clobber them on copy.
+    if (a.source === 'bound' && (a.bonds && Object.keys(a.bonds).length > 0 || (a.knownFacts || []).length > 0)) {
+      return { ...a, actionHistory: [] }
+    }
+    return {
+      ...a,
+      knownFacts:    [...seedKnowledge],
+      bonds:         { ...seedBonds },
+      actionHistory: [],
+    }
+  })
 
   // Init positions, exceptional perception (Phase 4b: Tier 1 via Haiku
   // doesn't need a warmup — no init step).
@@ -237,7 +256,7 @@ export async function* runSimulationRounds({
   if (!disableLLM) {
     const candidates = selectDialogueCandidates(allEvents, agentById, 0)
     if (candidates.length > 0) {
-      dialogues = await generateDialogues({ candidates, agentById })
+      dialogues = await generateDialogues({ candidates, agentById, storySnapshot })
     }
   }
 

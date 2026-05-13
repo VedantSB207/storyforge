@@ -29,13 +29,25 @@ Return ONLY a JSON object, no preamble or trailing text:
 }`
 
 // Build the user payload — keeps token use bounded even for huge runs
-function buildUserContent({ project, taxonomy, chars, summary, events, roundCount, timeUnit, censusStats, agents = [], butterflyStats = null, dialogues = [] }) {
+function buildUserContent({ project, taxonomy, chars, summary, events, roundCount, timeUnit, censusStats, agents = [], butterflyStats = null, dialogues = [], storySnapshot = null }) {
   const parts = []
 
   parts.push(`# Project\nTitle: ${project?.title || 'Untitled'}${project?.genre ? ` (${project.genre})` : ''}`)
 
+  if (storySnapshot) {
+    parts.push(`# Story snapshot — the moment the simulation begins from\n${storySnapshot}`)
+  }
+
+  // Phase 6/6a-i: weave per-character backgroundSummary into the chars list
+  // so the chronicler frames their actions against established context.
+
   if (chars && chars.length > 0) {
     parts.push('# Story Bible Characters (named, important)')
+    // Match each char to its hydrated agent (if any) for backgroundSummary
+    const bgByName = {}
+    for (const a of agents) {
+      if (a.source === 'bound' && a.backgroundSummary) bgByName[a.name] = a.backgroundSummary
+    }
     for (const c of chars) {
       const bits = [`- ${c.name || 'Unnamed'}`]
       if (c.species)        bits.push(`species: ${c.species}`)
@@ -43,6 +55,7 @@ function buildUserContent({ project, taxonomy, chars, summary, events, roundCoun
       if (c.traits)         bits.push(`traits: ${c.traits}`)
       if (c.stakes)         bits.push(`what they stand to lose: ${c.stakes}`)
       parts.push(bits.join(' · '))
+      if (bgByName[c.name]) parts.push(`    background: ${bgByName[c.name]}`)
     }
   }
 
@@ -236,7 +249,7 @@ function approximateHorizon(rounds, unit) {
 // Public — generate the narrative summary. Returns { narrative, headline,
 // notableEvents, usage } on success. Throws with bound error on failure
 // (Phase 1 lesson: never silently swallow).
-export async function generateNarrativeSummary({ simulationResult, project, taxonomy, chars, censusStats, roundCount, timeUnit }) {
+export async function generateNarrativeSummary({ simulationResult, project, taxonomy, chars, censusStats, roundCount, timeUnit, storySnapshot = null }) {
   const userContent = buildUserContent({
     project,
     taxonomy,
@@ -249,14 +262,21 @@ export async function generateNarrativeSummary({ simulationResult, project, taxo
     agents: simulationResult.agents,
     butterflyStats: simulationResult.butterflyStats,
     dialogues: simulationResult.dialogues,
+    storySnapshot,
   })
+
+  // Phase 6/6a-i: weave the story snapshot into the system prompt so the
+  // chronicle continues from the writer's current story moment.
+  const systemPrompt = storySnapshot
+    ? `${SYSTEM_PROMPT}\n\nThe writer's story currently sits at this moment:\n"${storySnapshot}"\n\nYour chronicle should continue from there — honour the story state when describing what unfolded.`
+    : SYSTEM_PROMPT
 
   let response
   try {
     response = await callClaude({
       model:      NARRATIVE_MODEL,
       max_tokens: NARRATIVE_MAX_TOKENS,
-      system:     SYSTEM_PROMPT,
+      system:     systemPrompt,
       messages:   [{ role: 'user', content: userContent }],
     })
   } catch (err) {

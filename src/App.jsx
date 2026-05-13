@@ -81,6 +81,9 @@ export default function StoryForge() {
   const [lastSimulation, setLastSimulation] = useState(null);
   const [selectedArc, setSelectedArc] = useState('discover');
   const [deepSimulationHistory, setDeepSimulationHistory] = useState([]);
+  // Phase 6/6a-i: project-level story snapshot + cached hydration data
+  const [storySnapshot, setStorySnapshot] = useState('');
+  const [hydrationData, setHydrationData] = useState(null);
 
   // ── Tab switch handler (persists lastTab)
   const switchTab = (tabId) => {
@@ -107,8 +110,9 @@ export default function StoryForge() {
       selectedArc, simulationCount, lastSimulation,
       timelineChapters, contFlags,
       deepSimulationHistory,
+      storySnapshot, hydrationData,
     });
-  }, [project, chars, lore, relationships, manuscript, tab, selectedArc, simulationCount, lastSimulation, timelineChapters, contFlags, deepSimulationHistory]);
+  }, [project, chars, lore, relationships, manuscript, tab, selectedArc, simulationCount, lastSimulation, timelineChapters, contFlags, deepSimulationHistory, storySnapshot, hydrationData]);
 
   // ── Open project: load its saved data
   const openProject = async (p) => {
@@ -126,6 +130,9 @@ export default function StoryForge() {
         setTimelineChapters(data.timelineChapters || []);
         setContFlags(data.contFlags || []);
         setDeepSimulationHistory(data.deepSimulationHistory || []);
+        // Phase 6/6a-i: hydrate the snapshot + cached hydration data
+        setStorySnapshot(data.storySnapshot || '');
+        setHydrationData(data.hydrationData || null);
       }
     }
     setProject(p);
@@ -242,8 +249,8 @@ export default function StoryForge() {
         {tab==='write'     && <WritingPanel project={project} chars={chars} lore={lore} manuscript={manuscript} setManuscript={setManuscript}/>}
         {tab==='mindmap'   && <MindMap projectTitle={project.title} chars={chars} importedEdges={importedEdges}/>}
         {tab==='simulation'&& <SimPanel chars={chars} lore={lore} setSimulationCount={setSimulationCount} setLastSimulation={setLastSimulation}/>}
-        {tab==='deepsim'   && <DeepSimulation project={project} chars={chars} lore={lore} timelineChapters={timelineChapters} deepSimulationHistory={deepSimulationHistory} setDeepSimulationHistory={setDeepSimulationHistory} setTab={switchTab}/>}
-        {tab==='bible'     && <StoryBible chars={chars} setChars={setChars} lore={lore} setLore={setLore}/>}
+        {tab==='deepsim'   && <DeepSimulation project={project} chars={chars} lore={lore} timelineChapters={timelineChapters} relationships={relationships} deepSimulationHistory={deepSimulationHistory} setDeepSimulationHistory={setDeepSimulationHistory} setTab={switchTab} storySnapshot={storySnapshot} hydrationData={hydrationData} setHydrationData={setHydrationData}/>}
+        {tab==='bible'     && <StoryBible chars={chars} setChars={setChars} lore={lore} setLore={setLore} storySnapshot={storySnapshot} setStorySnapshot={setStorySnapshot}/>}
         {tab==='relweb'    && <RelationshipWeb chars={chars} relationships={relationships} setRelationships={setRelationships} setRelNodes={setRelNodes} setRelEdges={setRelEdges}/>}
         {tab==='timeline'  && <Timeline project={project} timelineChapters={timelineChapters} setTimelineChapters={setTimelineChapters} contFlags={contFlags} setContFlags={setContFlags}/>}
         {tab==='import'    && <ImportAnalyse chars={chars} setChars={setChars} lore={lore} setLore={setLore} project={project} setImportedEdges={setImportedEdges} setTab={switchTab} setManuscript={setManuscript}/>}
