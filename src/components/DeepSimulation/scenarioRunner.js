@@ -25,7 +25,7 @@ function variantSeed(baseSeed, idx) {
 //   variantIndex, seed, summary, agents, events, butterflyStats,
 //   tierCounters, dialogues, llmUsageAll
 // }.
-async function runVariant({ variantIndex, baseSeed, chars, lore, taxonomy, castSize, roundCount, timeUnit, censusMultiplier, onProgress }) {
+async function runVariant({ variantIndex, baseSeed, chars, lore, taxonomy, castSize, roundCount, timeUnit, censusMultiplier, difficulty, onProgress }) {
   const seed = variantSeed(baseSeed, variantIndex)
   const built = buildCensus({ chars, taxonomy, castSize, censusMultiplier, rng: makeSeededRng(seed) })
 
@@ -34,6 +34,7 @@ async function runVariant({ variantIndex, baseSeed, chars, lore, taxonomy, castS
     initialAgents: built.activeCast,
     roundCount, timeUnit,
     lore, chars, seed,
+    difficulty,
   })
   for await (const snap of gen) {
     lastSnap = snap
@@ -65,6 +66,7 @@ export async function runScenario({
   baseSeed,
   variantCount = DEFAULT_SCENARIO_VARIANTS,
   mode = 'sequential',
+  difficulty = 'standard',
   onProgress = null,
 }) {
   const N = Math.min(MAX_SCENARIO_VARIANTS, Math.max(1, variantCount))
@@ -82,7 +84,7 @@ export async function runScenario({
       runners.push(
         runVariant({
           variantIndex: i, baseSeed, chars, lore, taxonomy,
-          castSize, roundCount, timeUnit, censusMultiplier, onProgress,
+          castSize, roundCount, timeUnit, censusMultiplier, difficulty, onProgress,
         }).catch(err => {
           console.error(`[Scenario] variant ${i} failed:`, err)
           failures.push({ variantIndex: i, error: err.message || String(err) })
@@ -97,7 +99,7 @@ export async function runScenario({
       try {
         const v = await runVariant({
           variantIndex: i, baseSeed, chars, lore, taxonomy,
-          castSize, roundCount, timeUnit, censusMultiplier, onProgress,
+          castSize, roundCount, timeUnit, censusMultiplier, difficulty, onProgress,
         })
         variants.push(v)
       } catch (err) {

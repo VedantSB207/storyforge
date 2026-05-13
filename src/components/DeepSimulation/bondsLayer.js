@@ -49,36 +49,84 @@ function applyDelta(bond, dIntensity, dTrust, eventType, currentRound) {
 }
 
 // Promote bond type based on intensity, trust, and history pattern.
+//
+// Phase 5 pre-fix — bidirectional promotion:
+//   The original implementation was one-directional: once a bond hit
+//   `rivalry` or `enmity`, sustained cooperation couldn't bring it back.
+//   This produced bonds with intensity 1.0 / trust 1.0 still typed
+//   'rivalry' after 27 cooperate events because of one early conflict.
+//
+//   Now: after each delta, check a windowed slice of recent history.
+//   - rivalry → friendship if last 10 entries are 70%+ cooperative AND trust > 0.3
+//   - enmity  → rivalry    if last 10 entries show no betrayals AND 50%+ cooperative AND trust > 0
+//   - enmity  → friendship if last 15 entries show no betrayals AND 70%+ cooperative AND trust > 0.4
+//   - The forward promotion paths (weak → friendship, friendship → love/kinship)
+//     are unchanged.
 function maybePromoteType(bond, agent, other, currentRound) {
-  const recent = bond.history.slice(-6)
+  const recent  = bond.history.slice(-6)
+  const recent10 = bond.history.slice(-10)
+  const recent15 = bond.history.slice(-15)
   const cooperateCount = recent.filter(h => h.eventType === 'cooperate').length
   const conflictCount  = recent.filter(h => h.eventType === 'conflict').length
   const betrayed       = recent.some(h => h.eventType === 'betrayal')
 
-  // Betrayal overrides everything
-  if (betrayed) { bond.type = 'enmity'; return }
+  const prevType = bond.type
+  const setType = (next) => {
+    if (next === bond.type) return
+    bond.history.push({ round: currentRound, eventType: 'promotion', from: prevType, to: next })
+    bond.type = next
+  }
+
+  // ── Forward promotion paths ──
+  // Betrayal overrides everything (one-shot promotion to enmity)
+  if (betrayed) { setType('enmity'); return }
 
   // Enmity from sustained conflict
-  if (conflictCount >= 3) { bond.type = 'enmity'; return }
-  if (bond.trust < -0.6 && bond.intensity > 0.4) { bond.type = 'enmity'; return }
+  if (conflictCount >= 3) { setType('enmity'); return }
+  if (bond.trust < -0.6 && bond.intensity > 0.4) { setType('enmity'); return }
+
+  // ── Bidirectional re-promotion paths (Phase 5 pre-fix) ──
+  // Enmity → friendship after sustained healing (no betrayals in 15 rounds)
+  if (bond.type === 'enmity' && recent15.length >= 6) {
+    const betrayalsRecent15  = recent15.filter(h => h.eventType === 'betrayal').length
+    const cooperateRecent15  = recent15.filter(h => h.eventType === 'cooperate' || h.eventType === 'co_witness').length
+    const cooperateRatio15   = cooperateRecent15 / recent15.length
+    if (betrayalsRecent15 === 0 && cooperateRatio15 >= 0.7 && bond.trust > 0.4) {
+      setType('friendship'); return
+    }
+  }
+  // Enmity → rivalry (partial healing)
+  if (bond.type === 'enmity' && recent10.length >= 5) {
+    const betrayalsRecent10 = recent10.filter(h => h.eventType === 'betrayal').length
+    const cooperateRecent10 = recent10.filter(h => h.eventType === 'cooperate' || h.eventType === 'co_witness').length
+    const cooperateRatio10  = cooperateRecent10 / recent10.length
+    if (betrayalsRecent10 === 0 && cooperateRatio10 >= 0.5 && bond.trust > 0) {
+      setType('rivalry'); return
+    }
+  }
+  // Rivalry → friendship after sustained cooperation
+  if (bond.type === 'rivalry' && recent10.length >= 5) {
+    const cooperateRecent10 = recent10.filter(h => h.eventType === 'cooperate' || h.eventType === 'co_witness').length
+    const cooperateRatio10  = cooperateRecent10 / recent10.length
+    if (cooperateRatio10 >= 0.7 && bond.trust > 0.3) {
+      setType('friendship'); return
+    }
+  }
 
   // Rivalry from intermittent conflict + moderate intensity
   if (conflictCount >= 1 && bond.intensity > 0.3 && bond.trust < 0.2) {
-    bond.type = 'rivalry'
-    return
+    setType('rivalry'); return
   }
 
   // Phase 4b thresholds lowered so friendships actually form in 30 rounds.
   // Promote weak → friendship after sustained cooperation
   if (bond.type === 'weak' && bond.intensity > 0.2 && cooperateCount >= 2) {
-    bond.type = 'friendship'
-    return
+    setType('friendship'); return
   }
   // Friendship → love or kinship at moderate-high intensity
   if (bond.type === 'friendship' && bond.intensity > 0.4 && bond.trust > 0.3) {
-    // Heuristic: if both share genre prefix → kinship; else love
     const sharedGenre = (agent?.genreTag || '').split(':')[0] === (other?.genreTag || '').split(':')[0]
-    bond.type = sharedGenre ? 'kinship' : 'love'
+    setType(sharedGenre ? 'kinship' : 'love')
   }
 }
 

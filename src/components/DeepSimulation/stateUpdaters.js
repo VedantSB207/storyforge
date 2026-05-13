@@ -8,7 +8,20 @@ import {
   NEEDS_KEYS,
   NEEDS_BASELINE_PER_DAY,
   NEED_CRITICAL_THRESHOLD,
+  DIFFICULTY_PRESETS,
+  DIFFICULTY_DEFAULT,
 } from './deepSimSchema.js'
+
+// Map a need key to its difficulty multiplier slot. Needs not listed in the
+// preset (esteem, purpose) use 1.0 — they're not the dominant survival
+// drivers and the preset is primarily about mortality pacing.
+function needMultiplier(needKey, preset) {
+  const p = DIFFICULTY_PRESETS[preset] || DIFFICULTY_PRESETS[DIFFICULTY_DEFAULT]
+  if (needKey === 'physiological') return p.physDecay
+  if (needKey === 'safety')        return p.safetyDecay
+  if (needKey === 'belonging')     return p.belongDecay
+  return 1.0
+}
 
 // ── Aging ────────────────────────────────────────────────────────────────────
 // Each round advances the agent's age by the time-unit-in-years. Long-running
@@ -34,11 +47,27 @@ export function depleteNeeds(agent, ctx) {
   const newNeeds = { ...agent.needs }
   const fired = { ...agent._firedNeedCritical }
   const events = []
+  const difficulty = ctx.difficulty || DIFFICULTY_DEFAULT
+
+  // Phase 5 pre-fix — needs→health damage loop. Without this the
+  // difficulty preset doesn't materially affect mortality (which is age-
+  // driven by default). Critical physiological or safety → health drops.
+  let healthDamage = 0
 
   for (const k of NEEDS_KEYS) {
     const before = newNeeds[k]
-    const next = Math.max(0, before - NEEDS_BASELINE_PER_DAY[k] * daysPerRound)
+    const multiplier = needMultiplier(k, difficulty)
+    const next = Math.max(0, before - NEEDS_BASELINE_PER_DAY[k] * daysPerRound * multiplier)
     newNeeds[k] = next
+    // Critical-need health damage (per-round; scaled by daysPerRound so
+    // a 1-day round inflicts a fraction of a 1-year round)
+    if ((k === 'physiological' || k === 'safety') && next < NEED_CRITICAL_THRESHOLD) {
+      // Severity = how far below threshold, capped at 1
+      const severity = (NEED_CRITICAL_THRESHOLD - next) / NEED_CRITICAL_THRESHOLD
+      // Multiplier on the damage too — gentle is kinder, harsh is harsher
+      const damageScale = needMultiplier(k, difficulty)
+      healthDamage += severity * 0.04 * daysPerRound * damageScale
+    }
     if (
       before >= NEED_CRITICAL_THRESHOLD &&
       next < NEED_CRITICAL_THRESHOLD &&
@@ -54,8 +83,9 @@ export function depleteNeeds(agent, ctx) {
       })
     }
   }
+  const newHealth = Math.max(0, (agent.health ?? 1) - healthDamage)
   return {
-    agent: { ...agent, needs: newNeeds, _firedNeedCritical: fired },
+    agent: { ...agent, needs: newNeeds, health: newHealth, _firedNeedCritical: fired },
     events,
   }
 }

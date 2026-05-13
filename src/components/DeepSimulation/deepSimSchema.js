@@ -36,6 +36,16 @@ export const NEEDS_BASELINE_PER_DAY = {
 // Threshold below which a need-critical event fires (once per crossing).
 export const NEED_CRITICAL_THRESHOLD = 0.2
 
+// Phase 5 pre-fix — Difficulty preset multipliers on need depletion rates.
+// Standard is the Phase 4 baseline (~80-95% mortality at 30 year-rounds).
+// Gentle is slow-burn drama — most characters survive. Harsh is apocalyptic.
+export const DIFFICULTY_PRESETS = Object.freeze({
+  gentle:   { physDecay: 0.7, safetyDecay: 0.7, belongDecay: 0.8 },
+  standard: { physDecay: 1.0, safetyDecay: 1.0, belongDecay: 1.0 },
+  harsh:    { physDecay: 1.3, safetyDecay: 1.3, belongDecay: 1.2 },
+})
+export const DIFFICULTY_DEFAULT = 'standard'
+
 // Documented schema for a Phase 1 agent. Frozen for safety.
 export const AGENT_SCHEMA = Object.freeze({
   // Layer 1 — Identity

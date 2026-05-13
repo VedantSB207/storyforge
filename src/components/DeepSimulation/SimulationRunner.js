@@ -59,6 +59,8 @@ export async function* runSimulationRounds({
   // Test-only: disable all LLM (Tier 1 + Tier 2 decisions + Phase 3 distortion).
   // With same seed, two runs will be byte-identical when this is on.
   disableLLM = false,
+  // Phase 5 pre-fix: difficulty preset for needs depletion pacing.
+  difficulty = 'standard',
 }) {
   const effectiveRng = seed != null ? makeSeededRng(seed) : rng
   let agents = initialAgents.map(a => ({
@@ -99,7 +101,7 @@ export async function* runSimulationRounds({
   let allEvents = []
 
   for (let round = 1; round <= roundCount; round++) {
-    const ctx = { round, timeUnit }
+    const ctx = { round, timeUnit, difficulty }
     const roundEvents = []
 
     tierCounters.tier1ThisRound = 0   // reset per-round Ollama cap
