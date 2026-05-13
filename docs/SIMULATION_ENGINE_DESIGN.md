@@ -1,7 +1,7 @@
 # StoryForge Deep Simulation Engine
 ## Implementation Design Document
 
-**Version 1.7**
+**Version 1.8**
 **Branch:** `deep-simulation-rebuild`
 **Document location in repo:** `docs/SIMULATION_ENGINE_DESIGN.md`
 
@@ -677,6 +677,44 @@ The narrative summary delivered in Phase 2.5 is a bridge to this experience, not
 
 ---
 
+### Story is the base; simulation is the projection forward
+
+The simulation must honor the writer's existing story as initial state, not rebuild it from zero. A writer who has spent months developing characters, relationships, and a timeline expects the simulation to extend that work, not replicate it from a blank slate.
+
+Phase 6 introduces **Bible Hydration** as the simulation's initialization layer:
+
+- Character profiles are read by an LLM at the first simulation run on a project. The engine extracts each character's age, current status, current location, and background summary. The writer reviews and edits these in a **Hydration Review screen** before the simulation begins.
+- The **Relationship Web** is read by the engine and mapped to initial agent bonds. A Bible entry "Jojo and Nyra are companions" becomes a starting friendship bond between their agents, not a void.
+- A **story snapshot** field describes the moment from which the simulation projects forward. The writer chooses per-simulation whether to use a project-level snapshot or enter a per-simulation override.
+- Optional **Knowledge seeding** pre-loads each bound character's Knowledge layer with what they know at story start, drawn from their profile and the existing chapters. Default ON; can be disabled via a popup that explains the impact.
+
+After hydration, the simulation runs as it did in Phases 1–5 — but the world it explores is *the writer's world at the current story moment*, not a tabula rasa.
+
+### World Rules
+
+The engine cannot assume Earth biology applies to every story. A fantasy world may have animals that live centuries; a slice-of-life drama may not care about aging at all. The writer is the authority on these rules, not the engine.
+
+Phase 6 introduces a **World Rules** panel as a top-level navigation item, separate from Story Bible and taxonomy. It contains:
+
+- **Aging behavior** — does aging matter? At what speed?
+- **Needs depletion** — per-need speed multipliers
+- **Per-kind lifespan overrides** — table of detected kinds with default lifespan ranges and overridable fields
+- **Global lifespan multiplier** — single dial scaling all lifespans
+- **Custom narrative rules** — free-text field where the writer describes any other rules of their world
+
+Additionally, the difficulty preset from Phase 5 is replaced by **Story-Scale Presets**:
+
+| Preset | Time unit | Rounds | Roughly covers |
+|---|---|---|---|
+| Thriller / Crisis | day | 30 | One month |
+| Drama / Focused story | week | 30 | 7 months |
+| Novel | month | 24 | 2 years |
+| Saga | year | 20 | 2 decades |
+| Generational epic | year | 100 | A century |
+| Custom | user-set | user-set | computed |
+
+---
+
 ## End of document
 
 When this document is updated by future Claude Code sessions, the version number at the top is incremented and a brief changelog is added to the bottom.
@@ -709,3 +747,5 @@ When this document is updated by future Claude Code sessions, the version number
 **Version 1.6** — Phase 4b architectural shift: Tier 1 migrated from Ollama (local) to Claude Haiku 4.5 (API). Tighter Tier 1 classification (~5%). Ollama path preserved deprecated for future hybrid optimization.
 
 **Version 1.7** — Phase 5/6 split documented. Phase 5 = visible world experience. Phase 6 = analytical depth + polish.
+
+**Version 1.8** — Phase 6: Bible Hydration (character inference, relationship → bonds, story snapshot, knowledge seeding). World Rules panel + Story-Scale Presets. Insight panels (blind spot, promotion candidates, emotional weather, themes). Live progress streaming. Credit observability. LLM-enriched character narratives.
