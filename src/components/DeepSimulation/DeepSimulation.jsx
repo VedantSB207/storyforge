@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { C, genId } from '../../constants.js'
-import { TIME_UNITS, CENSUS_MULTIPLIER } from './deepSimSchema.js'
+import { TIME_UNITS, CENSUS_MULTIPLIER, DIFFICULTY_PRESETS, DIFFICULTY_DEFAULT } from './deepSimSchema.js'
 import { runSimulationRounds, buildSummary, makeSeededRng } from './SimulationRunner.js'
 import { EventLog } from './EventLog.jsx'
 import { TaxonomyReview } from './TaxonomyReview.jsx'
@@ -9,6 +9,10 @@ import { buildCensus } from './CensusManager.js'
 import { generateNarrativeSummary, estimateNarrativeCostUSD } from './narrativeSummary.js'
 import { runScenario, buildVariantComparison } from './scenarioRunner.js'
 import { generateScenarioComparison } from './scenarioComparison.js'
+import { CharacterThreads } from './CharacterThreads.jsx'
+import { MapView } from './MapView.jsx'
+import { BondNetwork } from './BondNetwork.jsx'
+import { ButterflyTraceView } from './ButterflyTraceView.jsx'
 import {
   saveSimResult,
   loadSimResult,
@@ -42,6 +46,7 @@ export function DeepSimulation({
   const [castSize, setCastSize]       = useState(200)
   const [roundCount, setRoundCount]   = useState(30)
   const [timeUnit, setTimeUnit]       = useState('year')
+  const [difficulty, setDifficulty]   = useState(DIFFICULTY_DEFAULT)   // Phase 5 pre-fix
   const [variantCount, setVariantCount] = useState(3)   // Phase 4b/4 — scenario only
 
   // Scenario state (Phase 4b/4)
@@ -178,6 +183,8 @@ export function DeepSimulation({
         lore,
         chars,
         seed,
+        // Phase 5 pre-fix
+        difficulty,
       })
 
       for await (const snap of gen) {
@@ -307,6 +314,7 @@ export function DeepSimulation({
         baseSeed,
         variantCount,
         mode: 'sequential',
+        difficulty,
         onProgress: ({ variantIndex, round, roundCount: rc }) =>
           setScenarioProgress({ phase: 'simulating', variantIndex, round, roundCount: rc }),
       })
@@ -459,10 +467,12 @@ export function DeepSimulation({
       }
       fullEventsRef.current = full.events || []
       setFinalSnapshot({
-        agents: full.agents || [],
-        events: full.events || [],
+        agents:        full.agents || [],
+        events:        full.events || [],
         summary,
-        dialogues: full.dialogues || [],   // Phase 4b/3
+        dialogues:     full.dialogues || [],         // Phase 4b/3
+        butterflyTrace: full.butterflyTrace || null, // Phase 5 (often null — trace not persisted)
+        butterflyStats: full.butterflyStats || null,
       })
       setCensusStats(full.censusStats || null)
       setNarrative(full.narrative || null)
@@ -541,6 +551,27 @@ export function DeepSimulation({
           </div>
           <div style={{ marginTop: 8, fontSize: 10, color: C.muted, fontFamily: 'system-ui', fontStyle: 'italic' }}>
             {roundCount} {timeUnit}-rounds = approximately {formatHorizon(roundCount, timeUnit)} of in-world time.
+          </div>
+        </Section>
+
+        {/* Difficulty preset — Phase 5 pre-fix */}
+        <Section label="Difficulty">
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {Object.keys(DIFFICULTY_PRESETS).map(d => (
+              <button key={d} onClick={() => setDifficulty(d)}
+                style={{
+                  padding: '6px 14px',
+                  backgroundColor: difficulty === d ? C.gold + '33' : C.bgCard,
+                  color: difficulty === d ? C.gold : C.muted,
+                  border: `1px solid ${difficulty === d ? C.gold + '66' : C.border}`,
+                  borderRadius: 4, fontSize: 11, cursor: 'pointer', fontFamily: 'system-ui', textTransform: 'capitalize',
+                }}>{d}</button>
+            ))}
+          </div>
+          <div style={{ marginTop: 8, fontSize: 10, color: C.muted, fontFamily: 'system-ui', fontStyle: 'italic', lineHeight: 1.5 }}>
+            {difficulty === 'gentle'   && 'Gentle — slow-burn drama, most characters survive. Needs deplete slower.'}
+            {difficulty === 'standard' && 'Standard — balanced pressure. Phase 4 baseline calibration.'}
+            {difficulty === 'harsh'    && 'Harsh — apocalyptic, most characters perish. Needs deplete faster.'}
           </div>
         </Section>
 
@@ -774,31 +805,52 @@ export function DeepSimulation({
   // RESULTS (Phase 2.5 layout: Story → Notable → Final State → Event Log)
   // ─────────────────────────────────────────────────────────────────────────
   const summary = finalSnapshot?.summary
+  // Phase 5: assemble a full simulationResult object for the tabbed result
+  // screen and its child visualizations.
+  const simulationResult = {
+    agents:        finalSnapshot?.agents || [],
+    events:        fullEventsRef.current,
+    dialogues:     finalSnapshot?.dialogues || [],
+    butterflyTrace: finalSnapshot?.butterflyTrace || null,
+    butterflyStats: finalSnapshot?.butterflyStats || null,
+    summary,
+    roundCount,
+    timeUnit,
+    censusStats,
+    narrative,
+  }
   return <ResultsScreen
     project={project}
-    summary={summary}
+    simulationResult={simulationResult}
     narrative={narrative}
     narrativeError={narrativeError}
-    fullEvents={fullEventsRef.current}
-    dialogues={finalSnapshot?.dialogues || []}
-    censusStats={censusStats}
-    roundCount={roundCount}
-    timeUnit={timeUnit}
     onNewSimulation={newSimulation}
   />
 }
 
 // ─── Results screen (extracted; allows internal state for collapsibles) ────
-function ResultsScreen({ project, summary, narrative, narrativeError, fullEvents, dialogues = [], censusStats, roundCount, timeUnit, onNewSimulation }) {
-  const [showStats, setShowStats]     = useState(false)
-  const [showLog, setShowLog]         = useState(false)
+// ─── Phase 5: tabbed Results screen ───────────────────────────────────────
+const RESULT_TABS = [
+  { id: 'chronicle',  label: 'Chronicle'  },
+  { id: 'characters', label: 'Characters' },
+  { id: 'world',      label: 'World'      },
+  { id: 'bonds',      label: 'Bonds'      },
+  { id: 'causation',  label: 'Causation'  },
+]
 
-  const narrativeCost = estimateNarrativeCostUSD(narrative?.usage)
+function ResultsScreen({ project, simulationResult, narrative, narrativeError, onNewSimulation }) {
+  const [tab, setTab] = useState('chronicle')
+  const summary       = simulationResult?.summary
+  const dialogues     = simulationResult?.dialogues || []
+  const fullEvents    = simulationResult?.events    || []
+  const censusStats   = simulationResult?.censusStats
+  const roundCount    = simulationResult?.roundCount
+  const timeUnit      = simulationResult?.timeUnit
 
   return (
-    <div style={{ padding: 24, maxWidth: 820, margin: '0 auto', fontFamily: 'Georgia,serif' }}>
+    <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto', fontFamily: 'Georgia,serif' }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 15, color: C.purpleLight, fontWeight: 500 }}>Simulation Complete</div>
           <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', marginTop: 2 }}>
@@ -808,6 +860,35 @@ function ResultsScreen({ project, summary, narrative, narrativeError, fullEvents
         <button onClick={onNewSimulation} style={btnSecondary}>New Simulation</button>
       </div>
 
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${C.border}`, marginBottom: 16 }}>
+        {RESULT_TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={tabStyle(tab === t.id)}>{t.label}</button>
+        ))}
+      </div>
+
+      {tab === 'chronicle' && (
+        <ChronicleTab
+          summary={summary} narrative={narrative} narrativeError={narrativeError}
+          fullEvents={fullEvents} dialogues={dialogues}
+          censusStats={censusStats}
+        />
+      )}
+      {tab === 'characters' && <CharacterThreads simulationResult={simulationResult} />}
+      {tab === 'world'      && <MapView simulationResult={simulationResult} />}
+      {tab === 'bonds'      && <BondNetwork simulationResult={simulationResult} />}
+      {tab === 'causation'  && <ButterflyTraceView simulationResult={simulationResult} />}
+    </div>
+  )
+}
+
+function ChronicleTab({ summary, narrative, narrativeError, fullEvents, dialogues, censusStats }) {
+  const [showStats, setShowStats] = useState(false)
+  const [showLog, setShowLog]     = useState(false)
+  const narrativeCost = estimateNarrativeCostUSD(narrative?.usage)
+
+  return (
+    <div style={{ maxWidth: 820, margin: '0 auto' }}>
       {/* THE STORY — top, expanded by default */}
       <div style={{ backgroundColor: C.bgCard, border: `1px solid ${C.purple}55`, borderRadius: 8, padding: '20px 24px', marginBottom: 14, maxWidth: 720, marginLeft: 'auto', marginRight: 'auto' }}>
         <div style={{ fontSize: 10, color: C.purple, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 10 }}>The Story</div>
