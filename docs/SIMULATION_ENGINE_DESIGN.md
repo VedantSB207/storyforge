@@ -751,3 +751,22 @@ When this document is updated by future Claude Code sessions, the version number
 **Version 1.8** — Phase 6: Bible Hydration (character inference, relationship → bonds, story snapshot, knowledge seeding). World Rules panel + Story-Scale Presets. Insight panels (blind spot, promotion candidates, emotional weather, themes). Live progress streaming. Credit observability. LLM-enriched character narratives.
 
 **Version 1.9** — Phase 6a-ii landed. Top-level World Rules panel ships with: per-character/kind lifespan overrides (with substring fallback matching), aging matters toggle, aging speed multiplier, per-need depletion-rate multipliers, global lifespan multiplier, custom narrative rules. Story-Scale Presets (Thriller 30 days / Drama 30 weeks / Novel 24 months / Saga 20 years / Epic 100 years) replace the Phase 5 difficulty preset. customNarrativeRules thread through character inference, taxonomy detection, dialogue, and the chronicler. Mortality events now carry a `cause` field (`aging` | `health`). Verified on the Jojo project: long-lived chars (Vedant Organisation 10 000y, Master Akshara 2 000y, The Witch) survive a 30-week Drama run with `aging.matters: false`; zero aging deaths; chronicler honours vampire / werewolf-cat / eternal-institution rules. Test cost $0.55.
+
+---
+
+## Future phase backlog (post-rebuild)
+
+After Phase 6 completes and `deep-simulation-rebuild` merges to `main`, the following are candidate workstreams for Phase 7 and beyond. They are NOT scoped for Phase 6.
+
+### Phase 7 candidate — Emotional Depth
+
+Modeling how loss and trauma persist as decision-influencing forces beyond the moment of the event. The simulation should let characters carry their past forward.
+
+- **Memorial bonds** — bonds toward dead characters persist as a `memorial` flag on existing bond types (a love bond toward someone who has died remains a love bond, flagged memorial). Hydration creates them from Bible state when a bonded character has status `dead`, preserving hydration-time intensity. Memorial bonds flow into Tier 2 decision prompts as grief context — continuation of the dead's unfinished work, withdrawal patterns, seeking justice. They decay slowly by default and intensify on trigger events (e.g., learning new information about the death).
+- **Trauma persistence** — significant events leave decision-biasing residue that decays over rounds.
+- **Anniversary effects** — date-of-death and other significant dates trigger grief actions for memorial-bonded characters.
+- **Grief stages** — denial → anger → bargaining → acceptance progression, configurable per character.
+- **Survivor's guilt** — witnessing a death produces a specific bond mutation in the witness.
+- **Inherited patterns** — children of dead characters carry forward grief signatures their parents had.
+
+Together these distinguish a narrative physics engine from an AI writing assistant.
