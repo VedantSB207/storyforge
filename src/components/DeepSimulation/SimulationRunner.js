@@ -31,6 +31,11 @@ import {
   MAX_LLM_DISTORTION_CALLS_PER_ROUND,
   MAX_LLM_DISTORTION_CALLS_PER_SIM,
 } from './deepSimSchema.js'
+// Phase 6/6d — Insight panels
+import { detectBlindSpots } from './insights/blindSpotDetector.js'
+import { findPromotionCandidates } from './insights/promotionCandidates.js'
+import { computeEmotionalWeather } from './insights/emotionalWeather.js'
+import { detectThemes } from './insights/themeDetection.js'
 
 // Mulberry32 — small, fast, seeded PRNG. Same seed → same sequence.
 export function makeSeededRng(seed) {
@@ -74,6 +79,12 @@ export async function* runSimulationRounds({
   // lifespan overrides, custom narrative rules. When null, falls back to
   // legacy difficulty.
   worldRules = null,
+  // Phase 6/6d — insight panels: when true, after the round loop + dialogues
+  // the four insight modules run in parallel. Costs ~$0.06 per sim. Default
+  // off; the UI's "Generate insight panels" toggle drives this.
+  generateInsights = false,
+  // Optional taxonomy for blind-spot heuristics (unrepresented genres).
+  taxonomy = null,
 }) {
   const effectiveRng = seed != null ? makeSeededRng(seed) : rng
   let agents = initialAgents.map(a => {
@@ -272,6 +283,35 @@ export async function* runSimulationRounds({
     }
   }
 
+  // ── Phase 6/6d: Insight panels ─────────────────────────────────────────
+  // Four analytical panels run in parallel: blindSpots, promotionCandidates,
+  // emotionalWeather (no LLM), themes. Gated by the generateInsights flag.
+  // disableLLM forces all four to skip the Sonnet calls but emotionalWeather
+  // (pure aggregation) still runs.
+  let insights = null
+  if (generateInsights) {
+    const [blindSpotsRes, promoRes, themesRes] = await Promise.all([
+      disableLLM
+        ? Promise.resolve({ findings: [], observations: [], usage: null, cost: 0 })
+        : detectBlindSpots({ events: allEvents, agents, roundCount, timeUnit, censusStats: null, taxonomy }).catch(e => ({ error: e.message || String(e), findings: [], observations: [], usage: null, cost: 0 })),
+      disableLLM
+        ? Promise.resolve({ shortlist: [], candidates: [], usage: null, cost: 0 })
+        : findPromotionCandidates({ events: allEvents, agents, roundCount }).catch(e => ({ error: e.message || String(e), shortlist: [], candidates: [], usage: null, cost: 0 })),
+      disableLLM
+        ? Promise.resolve({ themes: [], usage: null, cost: 0 })
+        : detectThemes({ events: allEvents, agents, dialogues, roundCount, timeUnit }).catch(e => ({ error: e.message || String(e), themes: [], usage: null, cost: 0 })),
+    ])
+    const weather = computeEmotionalWeather({ events: allEvents, agents, roundCount })
+    const totalInsightCost = (blindSpotsRes.cost || 0) + (promoRes.cost || 0) + (themesRes.cost || 0)
+    insights = {
+      blindSpots:          blindSpotsRes,
+      promotionCandidates: promoRes,
+      emotionalWeather:    weather,
+      themes:              themesRes,
+      totalCost:           totalInsightCost,
+    }
+  }
+
   // Final yield with full diagnostics
   yield {
     round: roundCount,
@@ -287,6 +327,7 @@ export async function* runSimulationRounds({
     tierCounters: { ...tierCounters },
     actionCounts: { ...actionCounts },
     dialogues,
+    insights,           // Phase 6/6d
     progress: 1,
     final: true,
   }

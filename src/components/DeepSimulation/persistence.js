@@ -85,6 +85,7 @@ export function entryToFullPayload(entry) {
     llmCallsTotal:    entry.llmCallsTotal ?? null,
     tierCounters:     entry.tierCounters || null,
     dialogues:        entry.dialogues || [],
+    insights:         entry.insights || null,        // Phase 6/6d
     summary:          entry.summary || '',
   }
 }

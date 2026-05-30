@@ -28,7 +28,7 @@ function variantSeed(baseSeed, idx) {
 // Phase 6/6a-ii: variants accept worldRules + hydration + storySnapshot so
 // scenarios honour the same configuration as a single progressive run.
 // Phase 6/6c: isCancelled() lets the caller halt the scenario between rounds.
-async function runVariant({ variantIndex, baseSeed, chars, lore, taxonomy, castSize, roundCount, timeUnit, censusMultiplier, difficulty, onProgress, worldRules = null, hydration = null, storySnapshot = null, seededKnowledgeByAgentId = null, isCancelled = () => false }) {
+async function runVariant({ variantIndex, baseSeed, chars, lore, taxonomy, castSize, roundCount, timeUnit, censusMultiplier, difficulty, onProgress, worldRules = null, hydration = null, storySnapshot = null, seededKnowledgeByAgentId = null, isCancelled = () => false, generateInsights = false }) {
   const seed = variantSeed(baseSeed, variantIndex)
   const built = buildCensus({
     chars, taxonomy, castSize, censusMultiplier,
@@ -43,6 +43,8 @@ async function runVariant({ variantIndex, baseSeed, chars, lore, taxonomy, castS
     lore, chars, seed,
     difficulty,
     hydration, storySnapshot, seededKnowledgeByAgentId, worldRules,
+    // Phase 6/6d — per-variant insights
+    generateInsights, taxonomy,
   })
   for await (const snap of gen) {
     if (isCancelled()) break
@@ -69,6 +71,7 @@ async function runVariant({ variantIndex, baseSeed, chars, lore, taxonomy, castS
     tierCounters:   lastSnap.tierCounters,
     llmUsageAll:    lastSnap.llmUsageAll,
     dialogues:      lastSnap.dialogues || [],
+    insights:       lastSnap.insights || null,        // Phase 6/6d
   }
 }
 
@@ -91,6 +94,8 @@ export async function runScenario({
   seededKnowledgeByAgentId = null,
   // Phase 6/6c — caller-supplied cancel check (polled between rounds + variants)
   isCancelled = () => false,
+  // Phase 6/6d — per-variant insights
+  generateInsights = false,
 }) {
   const N = Math.min(MAX_SCENARIO_VARIANTS, Math.max(1, variantCount))
   const variants = []
@@ -108,7 +113,7 @@ export async function runScenario({
         runVariant({
           variantIndex: i, baseSeed, chars, lore, taxonomy,
           castSize, roundCount, timeUnit, censusMultiplier, difficulty, onProgress,
-          worldRules, hydration, storySnapshot, seededKnowledgeByAgentId, isCancelled,
+          worldRules, hydration, storySnapshot, seededKnowledgeByAgentId, isCancelled, generateInsights,
         }).catch(err => {
           console.error(`[Scenario] variant ${i} failed:`, err)
           failures.push({ variantIndex: i, error: err.message || String(err) })
@@ -125,7 +130,7 @@ export async function runScenario({
         const v = await runVariant({
           variantIndex: i, baseSeed, chars, lore, taxonomy,
           castSize, roundCount, timeUnit, censusMultiplier, difficulty, onProgress,
-          worldRules, hydration, storySnapshot, seededKnowledgeByAgentId, isCancelled,
+          worldRules, hydration, storySnapshot, seededKnowledgeByAgentId, isCancelled, generateInsights,
         })
         variants.push(v)
       } catch (err) {

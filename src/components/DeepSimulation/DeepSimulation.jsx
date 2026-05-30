@@ -16,6 +16,7 @@ import { BondNetwork } from './BondNetwork.jsx'
 import { ButterflyTraceView } from './ButterflyTraceView.jsx'
 import { SimulationProgress } from './SimulationProgress.jsx'
 import { estimateRunCost, formatEstimateRange, compareActualToEstimate } from './costEstimator.js'
+import { BlindSpotsTab, PromotionCandidatesTab, EmotionalWeatherTab, ThemesTab } from './insights/InsightPanel.jsx'
 // Phase 6/6a-i — hydration pipeline
 import { HydrationReview } from './hydration/HydrationReview.jsx'
 import { runHydration, effectiveInference } from './hydration/hydrationOrchestrator.js'
@@ -110,6 +111,8 @@ export function DeepSimulation({
   // Phase 6/6b — opt-in toggle for persisting the butterfly trace with each
   // saved simulation. Off by default (trace can reach ~50MB at 1000 cast).
   const [preserveCausation, setPreserveCausation] = useState(false)
+  // Phase 6/6d — generate insight panels (~$0.06 per sim). Default ON.
+  const [insightPanelsEnabled, setInsightPanelsEnabled] = useState(true)
   // Phase 6/6c — live cost tracker + tier counters surfaced in the running screen
   const [liveCostUSD, setLiveCostUSD]         = useState(0)
   const [liveTierCounters, setLiveTierCounters] = useState(null)
@@ -194,10 +197,10 @@ export function DeepSimulation({
     boundCharCount: boundCount,
     hasHydration: !!hydrationData?.inferences,
     knowledgeSeedingEnabled,
-    insightPanelsEnabled: false,    // 6d wires this on
+    insightPanelsEnabled,    // Phase 6/6d
     variantCount: mode === 'scenario' ? variantCount : 1,
     mode,
-  }), [castSize, roundCount, boundCount, hydrationData, knowledgeSeedingEnabled, mode, variantCount])
+  }), [castSize, roundCount, boundCount, hydrationData, knowledgeSeedingEnabled, mode, variantCount, insightPanelsEnabled])
 
   // ── Stale taxonomy detection ──────────────────────────────────────────────
   const currentFingerprint = useMemo(
@@ -385,6 +388,9 @@ export function DeepSimulation({
         seededKnowledgeByAgentId,
         // Phase 6/6a-ii — world rules drive aging, needs pacing, lifespans
         worldRules: effectiveWorldRules,
+        // Phase 6/6d — insight panels (toggle-gated, ~$0.06)
+        generateInsights: insightPanelsEnabled,
+        taxonomy,
       })
 
       for await (const snap of gen) {
@@ -457,7 +463,9 @@ export function DeepSimulation({
       ? ((narrativeOut.usage.input_tokens || 0) * 3 + (narrativeOut.usage.output_tokens || 0) * 15) / 1_000_000
       : 0
     const baseActual = computeSnapshotCost(lastSnap)
-    const actual = baseActual + narrativeCostUSD
+    // Phase 6/6d — insight calls were issued inside the runner; add their cost
+    const insightsCostUSD = lastSnap?.insights?.totalCost || 0
+    const actual = baseActual + narrativeCostUSD + insightsCostUSD
       + (hydrationCostInfo?.cost || 0)
       + (hydrationCostInfo?.seedingCost || 0)
     setActualRunCost(actual)
@@ -484,6 +492,7 @@ export function DeepSimulation({
       llmCallsTotal: lastSnap.llmCallsTotal,
       tierCounters:  lastSnap.tierCounters,
       dialogues:     lastSnap.dialogues || [],   // Phase 4b/3
+      insights:      lastSnap.insights || null,  // Phase 6/6d
       narrative:  narrativeOut,
       summary:    `${summary.alive}/${summary.total} alive, ${summary.dead} died over ${roundCount} ${timeUnit}-round${roundCount === 1 ? '' : 's'}. ${built.stats.boundCount} bound + ${built.stats.activeCastCount - built.stats.boundCount} procedural in cast (${built.stats.censusCount} census).`,
     }
@@ -552,6 +561,8 @@ export function DeepSimulation({
         worldRules: effectiveWorldRules,
         // Phase 6/6c — let the writer halt a scenario mid-flight
         isCancelled: () => cancelRef.current,
+        // Phase 6/6d — per-variant insight panels
+        generateInsights: insightPanelsEnabled,
         onProgress: ({ variantIndex, round, roundCount: rc, snap, censusStats: cs }) => {
           setScenarioProgress({ phase: 'simulating', variantIndex, round, roundCount: rc })
           // Phase 6/6c — surface per-snapshot data to the live progress screen
@@ -627,6 +638,7 @@ export function DeepSimulation({
             preserveCausation,                                              // Phase 6/6b
             tierCounters: v.tierCounters,
             dialogues: v.dialogues,
+            insights: v.insights || null,                                   // Phase 6/6d
             narrative: v.narrative,
             summary: `${v.summary.alive}/${v.summary.total} alive, ${v.summary.dead} died.`,
             // Phase 6/6b: keep structured summary for past-run reload — the
@@ -739,6 +751,7 @@ export function DeepSimulation({
             dialogues:      f.dialogues || [],
             censusStats:    f.censusStats || null,
             narrative:      f.narrative || null,
+            insights:       f.insights || null,   // Phase 6/6d
           })
         }
         setScenarioRecord({ ...scenarioRecord, variants })
@@ -770,6 +783,7 @@ export function DeepSimulation({
         dialogues:     full.dialogues || [],         // Phase 4b/3
         butterflyTrace: full.butterflyTrace || null, // Phase 5 (often null — trace not persisted)
         butterflyStats: full.butterflyStats || null,
+        insights:      full.insights || null,        // Phase 6/6d
       })
       setCensusStats(full.censusStats || null)
       setNarrative(full.narrative || null)
@@ -940,6 +954,26 @@ export function DeepSimulation({
                 {preserveCausation
                   ? 'The Causation tab will be fully populated when you re-open this simulation. Trace data is written to disk with the run.'
                   : 'The Causation tab is available during the run but not when viewing this simulation later. Recommended for most projects.'}
+              </div>
+            </div>
+          </label>
+        </Section>
+
+        {/* Phase 6/6d — Insight panels toggle */}
+        <Section label="Insight panels">
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', padding: '6px 0' }}>
+            <input type="checkbox" checked={insightPanelsEnabled}
+              onChange={(e) => setInsightPanelsEnabled(e.target.checked)}
+              style={{ marginTop: 3 }} />
+            <div>
+              <div style={{ fontSize: 12, color: insightPanelsEnabled ? C.parch : C.mutedLight, fontFamily: 'system-ui' }}>
+                Generate insight panels{' '}
+                <span style={{ fontSize: 10, color: C.muted, fontStyle: 'italic' }}>(~$0.06 per simulation)</span>
+              </div>
+              <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', fontStyle: 'italic', lineHeight: 1.5, marginTop: 2 }}>
+                {insightPanelsEnabled
+                  ? 'After the run completes, the engine runs four analytical passes: Blind Spots, Promotion Candidates, Emotional Weather, Themes. Each becomes a results-screen tab.'
+                  : 'Skip the post-run analytical passes. The four insight tabs will show an empty state.'}
               </div>
             </div>
           </label>
@@ -1326,6 +1360,7 @@ export function DeepSimulation({
     timeUnit,
     censusStats,
     narrative,
+    insights:      finalSnapshot?.insights || null,   // Phase 6/6d
   }
   return <ResultsScreen
     project={project}
@@ -1341,11 +1376,16 @@ export function DeepSimulation({
 // ─── Results screen (extracted; allows internal state for collapsibles) ────
 // ─── Phase 5: tabbed Results screen ───────────────────────────────────────
 const RESULT_TABS = [
-  { id: 'chronicle',  label: 'Chronicle'  },
-  { id: 'characters', label: 'Characters' },
-  { id: 'world',      label: 'World'      },
-  { id: 'bonds',      label: 'Bonds'      },
-  { id: 'causation',  label: 'Causation'  },
+  { id: 'chronicle',     label: 'Chronicle'           },
+  { id: 'characters',    label: 'Characters'          },
+  { id: 'world',         label: 'World'               },
+  { id: 'bonds',         label: 'Bonds'               },
+  { id: 'causation',     label: 'Causation'           },
+  // Phase 6/6d — analytical insight panels
+  { id: 'blindspots',    label: 'Blind Spots'         },
+  { id: 'promotion',     label: 'Promotion Candidates'},
+  { id: 'weather',       label: 'Emotional Weather'   },
+  { id: 'themes',        label: 'Themes'              },
 ]
 
 function ResultsScreen({ project, simulationResult, narrative, narrativeError, onNewSimulation, actualCost = null, estimate = null }) {
@@ -1402,6 +1442,10 @@ function ResultsScreen({ project, simulationResult, narrative, narrativeError, o
       {tab === 'world'      && <MapView simulationResult={simulationResult} />}
       {tab === 'bonds'      && <BondNetwork simulationResult={simulationResult} />}
       {tab === 'causation'  && <ButterflyTraceView simulationResult={simulationResult} />}
+      {tab === 'blindspots' && <BlindSpotsTab insight={simulationResult?.insights?.blindSpots} />}
+      {tab === 'promotion'  && <PromotionCandidatesTab insight={simulationResult?.insights?.promotionCandidates} agents={simulationResult?.agents} />}
+      {tab === 'weather'    && <EmotionalWeatherTab insight={simulationResult?.insights?.emotionalWeather} />}
+      {tab === 'themes'     && <ThemesTab insight={simulationResult?.insights?.themes} />}
     </div>
   )
 }
@@ -1635,6 +1679,7 @@ function VariantPanel({ variant, baseConfig }) {
     timeUnit:       baseConfig?.timeUnit,
     censusStats:    variant.censusStats,
     narrative:      variant.narrative,
+    insights:       variant.insights || null,    // Phase 6/6d
   }
   return (
     <VariantResults
@@ -1682,6 +1727,10 @@ function VariantResults({ variant, simulationResult, narrative }) {
       {tab === 'world'      && <MapView simulationResult={simulationResult} />}
       {tab === 'bonds'      && <BondNetwork simulationResult={simulationResult} />}
       {tab === 'causation'  && <ButterflyTraceView simulationResult={simulationResult} />}
+      {tab === 'blindspots' && <BlindSpotsTab insight={simulationResult?.insights?.blindSpots} />}
+      {tab === 'promotion'  && <PromotionCandidatesTab insight={simulationResult?.insights?.promotionCandidates} agents={simulationResult?.agents} />}
+      {tab === 'weather'    && <EmotionalWeatherTab insight={simulationResult?.insights?.emotionalWeather} />}
+      {tab === 'themes'     && <ThemesTab insight={simulationResult?.insights?.themes} />}
     </div>
   )
 }
