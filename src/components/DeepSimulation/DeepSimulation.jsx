@@ -113,6 +113,18 @@ export function DeepSimulation({
   const [preserveCausation, setPreserveCausation] = useState(false)
   // Phase 6/6d — generate insight panels (~$0.06 per sim). Default ON.
   const [insightPanelsEnabled, setInsightPanelsEnabled] = useState(true)
+  // Phase 6/6e — first-time-user welcome banner, dismissal persisted per
+  // project via localStorage. Per-project so a writer opening a new project
+  // sees the welcome again.
+  const welcomeStorageKey = project?.id ? `storyforge.deepsim.welcome.${project.id}` : null
+  const [welcomeDismissed, setWelcomeDismissed] = useState(() => {
+    if (!welcomeStorageKey) return true
+    try { return localStorage.getItem(welcomeStorageKey) === '1' } catch { return false }
+  })
+  const dismissWelcome = () => {
+    setWelcomeDismissed(true)
+    try { if (welcomeStorageKey) localStorage.setItem(welcomeStorageKey, '1') } catch {}
+  }
   // Phase 6/6c — live cost tracker + tier counters surfaced in the running screen
   const [liveCostUSD, setLiveCostUSD]         = useState(0)
   const [liveTierCounters, setLiveTierCounters] = useState(null)
@@ -805,13 +817,33 @@ export function DeepSimulation({
   if (step === 'setup') {
     return (
       <div style={{ padding: 24, maxWidth: 720, margin: '0 auto', fontFamily: 'Georgia,serif' }}>
-        <div style={{ backgroundColor: C.bgElevated, border: `1px solid ${C.purple}55`, borderRadius: 8, padding: '16px 20px', marginBottom: 20 }}>
-          <div style={{ fontSize: 13, color: C.purpleLight, fontWeight: 'bold', marginBottom: 8 }}>✦ Deep Simulation — Phase 2 World Population</div>
-          <div style={{ fontSize: 12, color: C.mutedLight, lineHeight: 1.8, fontFamily: 'system-ui' }}>
-            Real multi-agent simulation. Phase 2 generates a procedural world from your project content — animal kingdom, mythology, humans, whatever your story implies. Bound Story Bible characters share the cast with procedurally generated NPCs.<br /><br />
-            <strong style={{ color: C.gold }}>Phase 2 scope:</strong> taxonomy detection + NPC generation + census/cast model. Round loop still deterministic — no decisions, no information propagation, no LLM calls during rounds.
+        {/* Phase 6/6e — first-time-user welcome banner, per-project dismissal */}
+        {!welcomeDismissed && (
+          <div style={{ position: 'relative', backgroundColor: C.bgElevated, border: `1px solid ${C.purple}55`, borderRadius: 8, padding: '18px 22px', marginBottom: 20 }}>
+            <button
+              onClick={dismissWelcome}
+              title="Dismiss this welcome"
+              style={{
+                position: 'absolute', top: 8, right: 10, background: 'none', border: 'none',
+                color: C.muted, fontSize: 18, lineHeight: 1, cursor: 'pointer', padding: 4,
+                fontFamily: 'system-ui',
+              }}>×</button>
+            <div style={{ fontSize: 14, color: C.purpleLight, fontWeight: 600, marginBottom: 10, fontFamily: 'Georgia, serif' }}>
+              ✦ Welcome to Deep Simulation
+            </div>
+            <div style={{ fontSize: 12, color: C.mutedLight, lineHeight: 1.7, fontFamily: 'system-ui' }}>
+              This isn&rsquo;t a writing assistant — it&rsquo;s a narrative physics engine that lets you simulate your story&rsquo;s world. The engine reads your Story Bible characters, applies your World Rules, and runs them forward as autonomous agents. You watch what unfolds.
+              <br /><br />
+              <strong style={{ color: C.gold }}>Suggested first steps:</strong>
+              <ol style={{ margin: '6px 0 0 0', paddingLeft: 22, color: C.mutedLight, lineHeight: 1.7 }}>
+                <li>Build characters and a Story State in <strong>Story Bible</strong></li>
+                <li>Set the universe&rsquo;s physics in <strong>World Rules</strong> (aging, lifespan, custom rules)</li>
+                <li>Pick a <strong>Story-Scale Preset</strong> below (Drama is a good default)</li>
+                <li>Run a simulation, then read the 9 results tabs</li>
+              </ol>
+            </div>
           </div>
-        </div>
+        )}
 
         <Section label="Simulation Mode">
           <div style={{ display: 'flex', gap: 8 }}>
@@ -866,7 +898,7 @@ export function DeepSimulation({
         </Section>
 
         {/* Phase 6/6a-ii — Story-Scale Preset (replaces Phase 5 difficulty) */}
-        <Section label="Story-Scale Preset">
+        <Section label="Story-Scale Preset" help="Picks the time unit and number of rounds. Thriller = day×30, Drama = week×30, Novel = month×24, Saga = year×20, Epic = year×100. Picking a preset replaces Time Unit and Round Count above; you can override either after.">
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {Object.values(NARRATIVE_SCALE_PRESETS).map(p => (
               <button key={p.id} onClick={() => {
@@ -896,7 +928,7 @@ export function DeepSimulation({
         </Section>
 
         {/* Phase 6/6a-i — Story snapshot mode */}
-        <Section label="Story snapshot">
+        <Section label="Story snapshot" help="The story moment the simulation continues from. The chronicler, dialogues, and Tier 2 decisions all read this. Set the project-wide snapshot in Story Bible > Story State. Use 'custom for this run' to explore an alternate starting moment without editing the Bible.">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', padding: '6px 0' }}>
               <input type="radio" name="snapshotMode" checked={simSnapshotMode === 'project'} onChange={() => setSimSnapshotMode('project')} style={{ marginTop: 3 }} />
@@ -938,7 +970,7 @@ export function DeepSimulation({
         </Section>
 
         {/* Phase 6/6b — Causation data persistence toggle */}
-        <Section label="Causation data (Butterfly Trace)">
+        <Section label="Causation data (Butterfly Trace)" help="The butterfly trace records every cause→effect hop the simulation produced. Heavy: ~5 MB at 200 cast, ~50 MB at 1000. Off by default. Turn on to investigate causation chains on past runs — otherwise the Causation tab will show an empty state when you re-open this run.">
           <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', padding: '6px 0' }}>
             <input type="checkbox" checked={preserveCausation}
               onChange={e => setPreserveCausation(e.target.checked)}
@@ -960,7 +992,7 @@ export function DeepSimulation({
         </Section>
 
         {/* Phase 6/6d — Insight panels toggle */}
-        <Section label="Insight panels">
+        <Section label="Insight panels" help="After the run, four analytical passes produce results tabs: Blind Spots (under-served regions, low-agency chars), Promotion Candidates (NPCs the writer might name), Emotional Weather (stress/conflict/bonds over rounds), Themes (3–5 named patterns with evidence). ~$0.06 per sim.">
           <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', padding: '6px 0' }}>
             <input type="checkbox" checked={insightPanelsEnabled}
               onChange={(e) => setInsightPanelsEnabled(e.target.checked)}
@@ -980,7 +1012,7 @@ export function DeepSimulation({
         </Section>
 
         {/* Phase 6/6a-i — Knowledge seeding toggle */}
-        <Section label="Character knowledge">
+        <Section label="Character knowledge" help="Bible characters can start the simulation already knowing what your story says they know (self-knowledge + first-hand history). Recommended: ON for continuing your story; OFF for alternate-universe experiments. 5–8 facts per character, ~$0.10–0.15.">
           <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', padding: '6px 0' }}>
             <input type="checkbox" checked={knowledgeSeedingEnabled}
               onChange={(e) => {
@@ -1749,10 +1781,25 @@ function CollapsibleSection({ title, open, onToggle, children }) {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function Section({ label, children }) {
+// Phase 6/6e — Section accepts an optional `help` string that surfaces as a
+// "?" affordance with a native title tooltip. Help text is plain prose; the
+// tooltip is the writer's escape hatch from the dense setup screen.
+function Section({ label, help, children }) {
   return (
     <div style={{ marginBottom: 18 }}>
-      <div style={{ fontSize: 11, color: C.muted, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 8 }}>{label}</div>
+      <div style={{ fontSize: 11, color: C.muted, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span>{label}</span>
+        {help && (
+          <span
+            title={help}
+            style={{
+              fontSize: 9, color: C.purpleLight, border: `1px solid ${C.purple}55`,
+              borderRadius: '50%', width: 14, height: 14, lineHeight: '12px',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'help', fontFamily: 'system-ui', textTransform: 'none', letterSpacing: 0,
+            }}>?</span>
+        )}
+      </div>
       {children}
     </div>
   )

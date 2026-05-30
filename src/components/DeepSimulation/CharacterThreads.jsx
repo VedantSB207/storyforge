@@ -2,21 +2,29 @@
 // One collapsible card per bound Bible character, showing their chronological
 // arc through the simulation: actions, witnessed events, rumours, bond
 // promotions, dialogues. Data assembled by threadBuilder.js.
+//
+// Phase 6/6e — added per-character "Generate narrative arc" button. One Sonnet
+// call (~$0.01) per click. Cached in component state.
 
 import { useState, useMemo } from 'react'
 import { C } from '../../constants.js'
 import { buildCharacterThreads } from './threadBuilder.js'
 import { getAgentColor, getEventColor, getBondTypeColor } from './visualizationHelpers.js'
+import { generateCharacterArc } from './insights/characterArc.js'
 
 export function CharacterThreads({ simulationResult }) {
   const threads = useMemo(
     () => buildCharacterThreads(simulationResult || {}),
     [simulationResult]
   )
+  const dialogues = simulationResult?.dialogues || []
+  const agents = simulationResult?.agents || []
   const [expanded, setExpanded] = useState(() => {
     // First character expanded by default
     return new Set(threads[0] ? [threads[0].agentId] : [])
   })
+  // Phase 6/6e — per-character arc cache (agentId -> { arc, headline, cost, usage, generating?, error? })
+  const [arcs, setArcs] = useState({})
 
   const toggle = (id) => setExpanded(prev => {
     const next = new Set(prev)
@@ -24,6 +32,16 @@ export function CharacterThreads({ simulationResult }) {
     else next.add(id)
     return next
   })
+
+  const handleGenerateArc = async (thread) => {
+    setArcs(prev => ({ ...prev, [thread.agentId]: { generating: true } }))
+    try {
+      const result = await generateCharacterArc({ thread, allAgents: agents, dialogues })
+      setArcs(prev => ({ ...prev, [thread.agentId]: result }))
+    } catch (err) {
+      setArcs(prev => ({ ...prev, [thread.agentId]: { error: err.message || String(err) } }))
+    }
+  }
 
   if (threads.length === 0) {
     return (
@@ -41,13 +59,15 @@ export function CharacterThreads({ simulationResult }) {
           thread={thread}
           expanded={expanded.has(thread.agentId)}
           onToggle={() => toggle(thread.agentId)}
+          arcEntry={arcs[thread.agentId]}
+          onGenerateArc={() => handleGenerateArc(thread)}
         />
       ))}
     </div>
   )
 }
 
-function CharacterCard({ thread, expanded, onToggle }) {
+function CharacterCard({ thread, expanded, onToggle, arcEntry, onGenerateArc }) {
   const color = getAgentColor({ id: thread.agentId, source: 'bound' })
   const statusLabel = thread.alive
     ? `alive · age ${thread.ageEnd.toFixed(1)}`
@@ -106,6 +126,13 @@ function CharacterCard({ thread, expanded, onToggle }) {
             </div>
           )}
 
+          {/* Phase 6/6e — Narrative arc (on-demand) */}
+          <NarrativeArcBlock
+            thread={thread}
+            arcEntry={arcEntry}
+            onGenerate={onGenerateArc}
+          />
+
           {/* Timeline */}
           <div style={{ fontSize: 9, color: C.muted, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>Timeline</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 480, overflowY: 'auto', paddingRight: 6 }}>
@@ -153,6 +180,75 @@ function TimelineEntry({ entry }) {
       <div style={{ fontSize: 9, color, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.06em', flexShrink: 0, paddingTop: 1 }}>
         {entry.category}
       </div>
+    </div>
+  )
+}
+
+// Phase 6/6e — On-demand narrative arc block per character.
+// Three states: not-generated (button), generating (spinner), generated (prose + regenerate).
+function NarrativeArcBlock({ thread, arcEntry, onGenerate }) {
+  const generating = !!arcEntry?.generating
+  const hasArc     = !!arcEntry?.arc
+  const error      = arcEntry?.error
+
+  return (
+    <div style={{ marginBottom: 14, padding: '12px 14px', backgroundColor: C.bgElevated, border: `1px solid ${C.purple}33`, borderRadius: 5 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: hasArc ? 10 : 0 }}>
+        <span style={{ fontSize: 9, color: C.purpleLight, fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600 }}>
+          Narrative Arc
+        </span>
+        {generating ? (
+          <span style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', fontStyle: 'italic' }}>writing…</span>
+        ) : hasArc ? (
+          <>
+            <span style={{ flex: 1 }} />
+            {arcEntry.cost > 0 && (
+              <span style={{ fontSize: 9, color: C.muted, fontFamily: 'system-ui' }}>${arcEntry.cost.toFixed(4)}</span>
+            )}
+            <button
+              onClick={onGenerate}
+              title="Re-generate this character's narrative arc (~$0.01)"
+              style={{
+                padding: '3px 10px', fontSize: 10, fontFamily: 'system-ui',
+                backgroundColor: 'transparent', color: C.muted,
+                border: `1px solid ${C.border}`, borderRadius: 3, cursor: 'pointer',
+              }}>
+              Regenerate
+            </button>
+          </>
+        ) : (
+          <>
+            <span style={{ flex: 1 }} />
+            <button
+              onClick={onGenerate}
+              title="Generate a 2-3 paragraph narrative arc for this character (~$0.01)"
+              style={{
+                padding: '5px 12px', fontSize: 11, fontFamily: 'system-ui',
+                backgroundColor: C.purple, color: '#fff',
+                border: 'none', borderRadius: 4, cursor: 'pointer',
+              }}>
+              Generate narrative arc
+            </button>
+          </>
+        )}
+      </div>
+      {error && (
+        <div style={{ marginTop: 8, fontSize: 11, color: C.accBright, fontFamily: 'system-ui' }}>
+          Generation failed: {error}
+        </div>
+      )}
+      {hasArc && arcEntry.headline && (
+        <div style={{ fontSize: 13, color: C.parch, fontStyle: 'italic', fontFamily: 'Georgia, serif', marginBottom: 8, lineHeight: 1.4 }}>
+          &ldquo;{arcEntry.headline}&rdquo;
+        </div>
+      )}
+      {hasArc && (
+        <div style={{ fontSize: 13, color: C.parch, fontFamily: 'Georgia, serif', lineHeight: 1.7 }}>
+          {arcEntry.arc.split(/\n\n+/).map((p, i) => (
+            <p key={i} style={{ margin: i === 0 ? 0 : '10px 0 0' }}>{p}</p>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

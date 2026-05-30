@@ -194,6 +194,7 @@ function buildOneThread({ agent, agentById, eventsAsActor, eventsAsTarget, dialo
     finalNeeds:     { ...(agent.needs || {}) },
     knowledgeCount: (agent.knownFacts || []).length,
     dialogueCount:  (dialoguesByAgentId[agent.id] || []).length,
+    backgroundSummary: agent.backgroundSummary || '',   // Phase 6/6e — for arc context
   }
 }
 
