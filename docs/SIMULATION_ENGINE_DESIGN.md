@@ -1,7 +1,7 @@
 # StoryForge Deep Simulation Engine
 ## Implementation Design Document
 
-**Version 1.9**
+**Version 1.10**
 **Branch:** `deep-simulation-rebuild`
 **Document location in repo:** `docs/SIMULATION_ENGINE_DESIGN.md`
 
@@ -17,6 +17,42 @@ This is the source of truth for the Deep Simulation engine rebuild. Every Claude
 4. If anything in this document conflicts with what is found in the codebase, the codebase is the truth — flag the conflict to the user before making changes
 
 The document is divided into seven sections. Sections 1–3 are architectural background. Section 4 is the Phase 1 implementation brief — that is what gets built first. Sections 5 and 6 are verification and integration. Section 7 contains the briefs for Phases 2–5, which become active only after the previous phase has been verified working.
+
+---
+
+## How to use Deep Simulation (writer-facing workflow)
+
+After the Phase 6 rebuild, the writer's loop through the engine is:
+
+1. **Build the story in Story Bible.** Characters, lore, relationship web, manuscript. Story Bible stays the source of truth for who the characters are. Add a **Story State** entry under the Story Bible — a paragraph describing the moment the story currently sits at (e.g. "Jojo and his companions have just learned Garm has disappeared"). This becomes the starting moment of every simulation.
+
+2. **Set the universe's physics in World Rules.** This is a top-level navigation tab, separate from Story Bible. Configure:
+   - *Aging matters* toggle (off for mostly-immortal casts)
+   - *Aging speed* and *needs depletion* multipliers
+   - *Per-character/kind lifespan overrides* (e.g. "Vampires 5000 years")
+   - *Global lifespan multiplier*
+   - *Custom Narrative Rules* free text honored by the chronicler, dialogue, taxonomy detection, and character inference (e.g. "Vampires age 1 year per century.")
+
+3. **Open Deep Simulation.** First-run on a project shows a welcome banner pointing back at steps 1–2. Pick a **Story-Scale Preset** (Thriller 30 days / Drama 30 weeks / Novel 24 months / Saga 20 years / Epic 100 years), confirm the toggles (insight panels ON, knowledge seeding ON, causation OFF by default), and click Run. The pre-launch cost estimate appears below the Run button; a heads-up banner fires at >$1, a strong warning at >$5.
+
+4. **The engine hydrates your characters.** First run reads each Bible character's profile via Claude and infers age, status, location, background, and key relationships. Writer reviews and can edit any field. Edits are sacred — re-hydration after a profile change or World Rules edit preserves writer-confirmed values verbatim. Cost: ~$0.11–0.22 per project (one-time, cached).
+
+5. **Watch the world unfold.** During the run, a live progress screen shows round bar, last 20 events scrolling, tier counters (T0 deterministic / T1 Haiku / T2 Sonnet / dialogue / hydration), ETA, and live spend tracker against the estimate. Pause and Cancel work cleanly; cancelling halts at the next round and returns to setup.
+
+6. **Read the 9 results tabs:**
+   - **Chronicle** — a prose summary of the run + dialogue scenes the engine surfaced
+   - **Characters** — collapsible per-bound-character timelines, with a "Generate narrative arc" button per character (~$0.01 per click)
+   - **World** — Konva map of where events happened across regions
+   - **Bonds** — force-directed bond network with temporal evolution
+   - **Causation** — butterfly trace (only populated when *Preserve causation data* was on)
+   - **Blind Spots** — heuristic + Sonnet observations of under-served regions, low-agency characters, silent stretches
+   - **Promotion Candidates** — procedural NPCs the engine thinks earned a name, ranked with reasoning
+   - **Emotional Weather** — per-round stress/contentment/conflict/bond-formation chart
+   - **Themes** — 3–5 named themes with evidence and frequency tags
+
+7. **Run alternate Scenarios.** Same starting cast, N parallel variants (default 3). Each variant gets the full 9-tab layout plus a cross-variant Comparison tab. Variant insights computed per-variant.
+
+Every Phase 6 cost is honest: the pre-launch estimate has been calibrated against observed runs and falls within ±30%. Total cost for a default Drama run (200 cast × 30 weeks, all toggles on) sits around $1.20–$1.80 after the first hydration is cached.
 
 ---
 
@@ -751,6 +787,17 @@ When this document is updated by future Claude Code sessions, the version number
 **Version 1.8** — Phase 6: Bible Hydration (character inference, relationship → bonds, story snapshot, knowledge seeding). World Rules panel + Story-Scale Presets. Insight panels (blind spot, promotion candidates, emotional weather, themes). Live progress streaming. Credit observability. LLM-enriched character narratives.
 
 **Version 1.9** — Phase 6a-ii landed. Top-level World Rules panel ships with: per-character/kind lifespan overrides (with substring fallback matching), aging matters toggle, aging speed multiplier, per-need depletion-rate multipliers, global lifespan multiplier, custom narrative rules. Story-Scale Presets (Thriller 30 days / Drama 30 weeks / Novel 24 months / Saga 20 years / Epic 100 years) replace the Phase 5 difficulty preset. customNarrativeRules thread through character inference, taxonomy detection, dialogue, and the chronicler. Mortality events now carry a `cause` field (`aging` | `health`). Verified on the Jojo project: long-lived chars (Vedant Organisation 10 000y, Master Akshara 2 000y, The Witch) survive a 30-week Drama run with `aging.matters: false`; zero aging deaths; chronicler honours vampire / werewolf-cat / eternal-institution rules. Test cost $0.55.
+
+**Version 1.10** — Phase 6 complete. Six workstreams shipped:
+
+- **6a-i Bible Hydration** (2bea18d) — characterInference + relationshipMapper + knowledgeSeeder + HydrationReview + storySnapshot. Hydration data + writer edits stored sacred on the project.
+- **6a-ii World Rules + Story-Scale Presets** (98ce852) — top-level World Rules nav tab; presets replace the Phase 5 difficulty.
+- **6b Phase 5 carryovers** (a112567) — per-variant Scenario tabs use the full 5-tab ResultsScreen layout; opt-in `preserveCausation` toggle controls whether the butterfly trace is persisted with the run.
+- **6c Live experience + cost observability** (3285bf8) — SimulationProgress replaces the spinner with round bar, scrolling event log, tier counters, ETA, live spend tracker, Pause/Cancel. costEstimator surfaces pre-launch range; results header shows actual vs estimated.
+- **6d Insight panels** (0934ad2) — Blind Spots, Promotion Candidates, Emotional Weather (no LLM), Themes. Each becomes a results tab. ~$0.06 per sim.
+- **6e Final polish** — per-character narrative arc button (on-demand Sonnet ~$0.01/click), tooltips on every Phase 6 setup control, first-time welcome banner with per-project localStorage dismissal, Emotional Weather disclaimer (interpolation honesty), Themes prompt warns against shared-name hallucinations, cost warning now two-tier ($1 heads-up gold, $5 strong red). Hydration sacred-edits architecture verified.
+
+After v1.10, `deep-simulation-rebuild` is ready for merge into `main`.
 
 ---
 
