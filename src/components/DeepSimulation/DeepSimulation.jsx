@@ -505,6 +505,7 @@ export function DeepSimulation({
       tierCounters:  lastSnap.tierCounters,
       dialogues:     lastSnap.dialogues || [],   // Phase 4b/3
       insights:      lastSnap.insights || null,  // Phase 6/6d
+      emotionSnapshots: lastSnap.emotionSnapshots || null,   // Phase 7/7b
       narrative:  narrativeOut,
       summary:    `${summary.alive}/${summary.total} alive, ${summary.dead} died over ${roundCount} ${timeUnit}-round${roundCount === 1 ? '' : 's'}. ${built.stats.boundCount} bound + ${built.stats.activeCastCount - built.stats.boundCount} procedural in cast (${built.stats.censusCount} census).`,
     }
@@ -651,6 +652,7 @@ export function DeepSimulation({
             tierCounters: v.tierCounters,
             dialogues: v.dialogues,
             insights: v.insights || null,                                   // Phase 6/6d
+            emotionSnapshots: v.emotionSnapshots || null,                   // Phase 7/7b
             narrative: v.narrative,
             summary: `${v.summary.alive}/${v.summary.total} alive, ${v.summary.dead} died.`,
             // Phase 6/6b: keep structured summary for past-run reload — the
@@ -764,6 +766,7 @@ export function DeepSimulation({
             censusStats:    f.censusStats || null,
             narrative:      f.narrative || null,
             insights:       f.insights || null,   // Phase 6/6d
+            emotionSnapshots: f.emotionSnapshots || null,   // Phase 7/7b
           })
         }
         setScenarioRecord({ ...scenarioRecord, variants })
@@ -796,6 +799,7 @@ export function DeepSimulation({
         butterflyTrace: full.butterflyTrace || null, // Phase 5 (often null — trace not persisted)
         butterflyStats: full.butterflyStats || null,
         insights:      full.insights || null,        // Phase 6/6d
+        emotionSnapshots: full.emotionSnapshots || null,   // Phase 7/7b
       })
       setCensusStats(full.censusStats || null)
       setNarrative(full.narrative || null)
@@ -1401,6 +1405,7 @@ export function DeepSimulation({
     censusStats,
     narrative,
     insights:      finalSnapshot?.insights || null,   // Phase 6/6d
+    emotionSnapshots: finalSnapshot?.emotionSnapshots || null,   // Phase 7/7b
   }
   return <ResultsScreen
     project={project}
@@ -1720,6 +1725,7 @@ function VariantPanel({ variant, baseConfig }) {
     censusStats:    variant.censusStats,
     narrative:      variant.narrative,
     insights:       variant.insights || null,    // Phase 6/6d
+    emotionSnapshots: variant.emotionSnapshots || null,   // Phase 7/7b
   }
   return (
     <VariantResults

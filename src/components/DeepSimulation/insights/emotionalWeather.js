@@ -1,21 +1,23 @@
-// Phase 6/6d — Emotional Weather
+// Phase 6/6d — Emotional Weather (refreshed in Phase 7/7b)
 //
-// Pure aggregation, no LLM. Walks the event log and per-round agent state
-// to produce a time-series the chart can render:
-//   • stress       — average stress across living agents per round
-//   • contentment  — derived from needs satisfaction (mean of all 5 needs)
+// Pure aggregation, no LLM. Walks the event log + per-round emotion
+// snapshots (when present) to produce a time-series the chart renders:
+//   • stress       — mean stress across living agents per round
+//   • contentment  — mean contentment per round
 //   • conflict     — count of conflict + betrayal events per round
-//   • bondFormation— first-time bonds formed per round (any pair newly bonded)
+//   • bondFormation— first-time bonds formed per round
 //
-// The runner exposes per-round events but only the FINAL agent state, so
-// stress/contentment are approximations: we use the final agent state
-// snapshot and back-fill an estimate by walking events.
+// Phase 7/7b: when the runner provides `emotionSnapshots`, stress and
+// contentment come directly from those (real per-round measurement). On
+// older runs that lack snapshots, we fall back to the Phase 6 interpolation
+// (final state + event pulses) and tag the result so the UI can show the
+// "interpolated" disclaimer only when it's actually interpolated data.
 //
-// Output: { perRound: [{round, stress, contentment, conflict, bondFormation}],
-//           peaks, valleys, summary }
+// Output: { perRound: [...], peaks, valleys, summary, dataSource }
+//   dataSource: 'snapshots' (real, Phase 7/7b) | 'interpolated' (legacy)
 
-export function computeEmotionalWeather({ events = [], agents = [], roundCount = 0 }) {
-  if (roundCount <= 0) return { perRound: [], peaks: {}, valleys: {}, summary: 'No data.' }
+export function computeEmotionalWeather({ events = [], agents = [], roundCount = 0, emotionSnapshots = null }) {
+  if (roundCount <= 0) return { perRound: [], peaks: {}, valleys: {}, summary: 'No data.', dataSource: 'snapshots' }
 
   // Per-round event counts
   const conflictByRound = new Array(roundCount + 1).fill(0)
@@ -42,11 +44,57 @@ export function computeEmotionalWeather({ events = [], agents = [], roundCount =
     }
   }
 
-  // Stress/contentment — we only have final agent state, so build a per-
-  // round estimate by combining: base needs (final, scaled by death curve)
-  // and event-driven stress spikes per round. This is honest: the engine
-  // doesn't track per-round emotion history. Future Phase: emit emotion
-  // snapshots in the runner so this becomes precise.
+  // Phase 7/7b — real per-round emotion when the runner provides snapshots.
+  // We pool bound + NPC means weighted by their respective counts so the
+  // single "average stress" line reflects the full living population.
+  if (Array.isArray(emotionSnapshots) && emotionSnapshots.length > 0) {
+    const perRound = []
+    const byRound = new Map()
+    for (const s of emotionSnapshots) byRound.set(s.round, s)
+    for (let r = 1; r <= roundCount; r++) {
+      const snap = byRound.get(r)
+      let meanStress = 0, meanContent = 0
+      let boundCount = 0, boundStress = 0, boundContent = 0
+      if (snap) {
+        for (const [, e] of Object.entries(snap.bound || {})) {
+          boundStress  += e.stress
+          boundContent += e.contentment
+          boundCount   += 1
+        }
+        const npc = snap.npc
+        const npcN = npc?.count || 0
+        const total = boundCount + npcN
+        if (total > 0) {
+          meanStress  = (boundStress  + (npc?.meanStress      || 0) * npcN) / total
+          meanContent = (boundContent + (npc?.meanContentment || 0) * npcN) / total
+        }
+      }
+      perRound.push({
+        round: r,
+        stress:        +meanStress.toFixed(3),
+        contentment:   +meanContent.toFixed(3),
+        conflict:      conflictByRound[r] + betrayalByRound[r],
+        cooperation:   cooperationByRound[r],
+        bondFormation: bondFormationByRound[r],
+        deaths:        deathByRound[r],
+      })
+    }
+    const peakStress      = perRound.reduce((p, x) => x.stress > p.stress ? x : p, perRound[0])
+    const peakConflict    = perRound.reduce((p, x) => x.conflict > p.conflict ? x : p, perRound[0])
+    const peakContentment = perRound.reduce((p, x) => x.contentment > p.contentment ? x : p, perRound[0])
+    return {
+      perRound,
+      peaks: { stress: peakStress, conflict: peakConflict, contentment: peakContentment },
+      valleys: {},
+      summary: buildSummary(perRound, peakStress, peakConflict, peakContentment),
+      dataSource: 'snapshots',
+    }
+  }
+
+  // ── Legacy path (Phase 6/6d) — final state + event pulses ──────────────
+  // Kept so simulations saved before 7b can still render. UI shows the
+  // "interpolated from final state" disclaimer only when dataSource is
+  // 'interpolated'.
   const livingFinal = agents.filter(a => a.alive)
   const finalAvgStress = livingFinal.length === 0 ? 0
     : livingFinal.reduce((s, a) => s + (a.stress || 0), 0) / livingFinal.length
@@ -95,6 +143,7 @@ export function computeEmotionalWeather({ events = [], agents = [], roundCount =
     peaks: { stress: peakStress, conflict: peakConflict, contentment: peakContentment },
     valleys: {},
     summary: buildSummary(perRound, peakStress, peakConflict, peakContentment),
+    dataSource: 'interpolated',
   }
 }
 

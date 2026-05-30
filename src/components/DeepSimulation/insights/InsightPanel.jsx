@@ -249,10 +249,15 @@ export function EmotionalWeatherTab({ insight }) {
         <strong style={{ color: C.parch }}>Most content:</strong> round {insight.peaks.contentment.round}
       </div>
 
-      {/* Phase 6/6e — honest disclaimer about what's measured vs interpolated */}
-      <div style={{ marginTop: 12, padding: '8px 10px', backgroundColor: C.bgDeep, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 10, color: C.muted, fontFamily: 'system-ui', fontStyle: 'italic', lineHeight: 1.5 }}>
-        Per-round stress and contentment are interpolated from the final agent state plus per-round event pulses — the engine doesn&rsquo;t yet record an emotion history. Event counts (conflict, cooperation, new bonds, deaths) are real.
-      </div>
+      {/* Phase 6/6e disclaimer — only shown when the runner didn't emit
+          per-round emotion snapshots (e.g. simulations saved before 7b).
+          Phase 7/7b runs set dataSource='snapshots' and the disclaimer
+          disappears because the curves are now measured, not interpolated. */}
+      {insight.dataSource !== 'snapshots' && (
+        <div style={{ marginTop: 12, padding: '8px 10px', backgroundColor: C.bgDeep, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 10, color: C.muted, fontFamily: 'system-ui', fontStyle: 'italic', lineHeight: 1.5 }}>
+          Per-round stress and contentment are interpolated from the final agent state plus per-round event pulses — this run pre-dates the per-round emotion recorder (Phase 7/7b). Event counts (conflict, cooperation, new bonds, deaths) are real.
+        </div>
+      )}
     </InsightPanel>
   )
 }

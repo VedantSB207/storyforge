@@ -86,6 +86,11 @@ export function entryToFullPayload(entry) {
     tierCounters:     entry.tierCounters || null,
     dialogues:        entry.dialogues || [],
     insights:         entry.insights || null,        // Phase 6/6d
+    // Phase 7/7b — per-round emotion snapshots. Bound chars are always kept
+    // (small count). NPC aggregate is also always kept (cheap — one row per
+    // round). Measured size at 100 cast × 20 rounds: ~25KB; at 1000 cast it
+    // stays similar because per-NPC detail is aggregated, not stored.
+    emotionSnapshots: entry.emotionSnapshots || null,
     summary:          entry.summary || '',
   }
 }

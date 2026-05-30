@@ -160,6 +160,163 @@ export function mortalityCheck(agent, ctx, rng = Math.random) {
   return { agent: updatedAgent, events: [] }
 }
 
+// ── Phase 7/7b — Emotional state per round ──────────────────────────────────
+//
+// Deterministic, no LLM. Inputs:
+//   agent       — the agent at end-of-round (after needs depletion, actions,
+//                 mortality, and bond updates have run for this round)
+//   ctx         — { round, timeUnit, worldRules, ... }
+//   roundEvents — events emitted this round (death, betrayal, conflict,
+//                 cooperation, need_critical, etc.). The function scans for
+//                 the ones touching this agent.
+//   prevState   — last round's emotional state for this agent (optional).
+//                 Used to lightly carry-over: emotions decay toward baseline
+//                 over a few rounds, but spikes happen instantly.
+//
+// Output: { stress, contentment, grief, dominantEmotion }
+//   stress, contentment, grief ∈ [0, 1]
+//   dominantEmotion is a label from the existing schema:
+//     'calm' | 'joyful' | 'anxious' | 'angry' | 'grieving' | 'fearful' | 'vengeful'
+//
+// Design intent:
+//   • Stress is driven by low survival needs + recent dramatic events targeting
+//     the agent or close to them. Neuroticism amplifies the swing magnitude.
+//   • Contentment is the high-needs satisfaction picture, with agreeableness
+//     and low-neuroticism characters resting higher on it.
+//   • Grief is reserved for 7c — it stays at 0 here unless prevState.grief was
+//     set, in which case we let it decay slightly. 7c populates it on death.
+//   • Dominant emotion is derived from the numbers + psychology so the same
+//     stress level can read as 'anxious' (anxious-attachment, high N) vs
+//     'angry' (low agreeableness, high callousness).
+export function computeEmotionalState(agent, ctx, roundEvents = [], prevState = null) {
+  if (!agent) return { stress: 0, contentment: 0.5, grief: 0, dominantEmotion: 'calm' }
+
+  const needs = agent.needs || {}
+  // Safety + physiological dominate the survival/stress baseline.
+  const survival     = ((needs.physiological || 0) + (needs.safety || 0)) / 2
+  const socialPurpose= ((needs.belonging || 0) + (needs.esteem || 0) + (needs.purpose || 0)) / 3
+  // Health enters stress via direct damage signal.
+  const health       = Number.isFinite(agent.health) ? agent.health : 1
+
+  // ── Event modifiers — scan events touching this agent this round ──────
+  let eventStress = 0, eventContent = 0, eventGrief = 0
+  let sawBetrayalAgainst = false, sawConflictAgainst = false, sawCooperationFor = false
+  for (const ev of roundEvents) {
+    const myId = agent.id
+    const involvesMe = ev.agentId === myId || ev.targetId === myId
+    if (!involvesMe) continue
+    switch (ev.category) {
+      case 'death':
+        // Witnessing/being source of a death raises stress sharply.
+        eventStress += 0.25
+        break
+      case 'betrayal':
+        if (ev.targetId === myId) { eventStress += 0.30; sawBetrayalAgainst = true }
+        else                       { eventStress += 0.05 }
+        break
+      case 'conflict':
+        if (ev.targetId === myId) { eventStress += 0.18; sawConflictAgainst = true }
+        else                       { eventStress += 0.08 }
+        break
+      case 'cooperation':
+        eventContent += 0.18
+        sawCooperationFor = true
+        break
+      case 'need_critical':
+        eventStress += 0.10
+        break
+      case 'travel':
+        eventContent += 0.02   // mild — change of scene
+        break
+      default: break
+    }
+  }
+  // Clamp event-driven deltas before psychology amplification so neuroticism
+  // can't push stress past 1.5 from a single round.
+  eventStress  = Math.min(0.7, eventStress)
+  eventContent = Math.min(0.5, eventContent)
+
+  // ── Psychology amplification ──────────────────────────────────────────
+  const p = agent.psychology || {}
+  const bf = p.bigFive || {}
+  const mk = p.markers || {}
+  const N  = Number.isFinite(bf.neuroticism)    ? bf.neuroticism    : 0.5
+  const A  = Number.isFinite(bf.agreeableness)  ? bf.agreeableness  : 0.5
+  const E  = Number.isFinite(bf.extraversion)   ? bf.extraversion   : 0.5
+  const VENG = Number.isFinite(mk.vengefulness) ? mk.vengefulness   : 0
+  const CALL = Number.isFinite(mk.callousness)  ? mk.callousness    : 0
+
+  // Neuroticism amplifies event-driven swings by up to +50%.
+  const swingMult = 1 + 0.5 * (N - 0.5) * 2   // N=0.5 → 1.0; N=1 → 1.5; N=0 → 0.5
+  eventStress  *= swingMult
+  eventContent *= swingMult
+
+  // ── Stress: baseline + event pulse + health damage ────────────────────
+  const survivalStress = Math.max(0, 0.5 - survival)            // low needs → stress
+  const healthStress   = Math.max(0, 1 - health) * 0.5
+  let stress = survivalStress + healthStress + eventStress
+  // Neurotic baseline: high-N characters carry more ambient anxiety even when calm
+  stress += 0.08 * (N - 0.5) * 2 * Math.max(0, 1 - eventStress / 0.5)
+  // Carry-over from previous round (decay toward current value)
+  if (prevState && Number.isFinite(prevState.stress)) {
+    stress = 0.65 * stress + 0.35 * prevState.stress
+  }
+  stress = Math.min(1, Math.max(0, stress))
+
+  // ── Contentment: baseline + event pulse - stress drag ────────────────
+  let contentment = 0.4 * survival + 0.5 * socialPurpose + 0.1 * health
+  contentment += eventContent
+  // High agreeableness rests slightly higher; high callousness lower
+  contentment += 0.1 * (A - 0.5) * 2
+  contentment -= 0.12 * CALL
+  contentment -= 0.3 * stress     // stress drags contentment down
+  if (prevState && Number.isFinite(prevState.contentment)) {
+    contentment = 0.7 * contentment + 0.3 * prevState.contentment
+  }
+  contentment = Math.min(1, Math.max(0, contentment))
+
+  // ── Grief: reserved for 7c. Decay any carried-over value. ────────────
+  let grief = 0
+  if (prevState && Number.isFinite(prevState.grief)) {
+    grief = Math.max(0, prevState.grief * 0.92)
+  }
+
+  // ── Dominant emotion derivation ──────────────────────────────────────
+  //   Priority order (first match wins):
+  //   1. grieving — grief > 0.4
+  //   2. vengeful — recent betrayal-against AND vengefulness > 0.4
+  //   3. angry    — high stress AND (low agreeableness OR callousness > 0.5)
+  //   4. fearful  — high stress AND anxious/fearful attachment + low extraversion
+  //   5. anxious  — high stress + high neuroticism (default high-stress label)
+  //   6. joyful   — high contentment AND high extraversion
+  //   7. calm     — fallback
+  let dominantEmotion = 'calm'
+  if (grief > 0.4) {
+    dominantEmotion = 'grieving'
+  } else if (sawBetrayalAgainst && VENG > 0.4) {
+    dominantEmotion = 'vengeful'
+  } else if (stress > 0.55 && (A < 0.4 || CALL > 0.5)) {
+    dominantEmotion = 'angry'
+  } else if (stress > 0.55 && (p.attachment === 'fearful' || (p.attachment === 'anxious' && E < 0.4))) {
+    dominantEmotion = 'fearful'
+  } else if (stress > 0.55) {
+    dominantEmotion = 'anxious'
+  } else if (contentment > 0.7 && E > 0.55) {
+    dominantEmotion = 'joyful'
+  } else {
+    dominantEmotion = 'calm'
+  }
+  // Silence "unused but useful for future predicate" warnings
+  void sawConflictAgainst; void sawCooperationFor
+
+  return {
+    stress:           +stress.toFixed(3),
+    contentment:      +contentment.toFixed(3),
+    grief:            +grief.toFixed(3),
+    dominantEmotion,
+  }
+}
+
 // ── Aging milestone log ──────────────────────────────────────────────────────
 // For long-unit simulations we want occasional "aging" events so the log isn't
 // silent. Emits one aging event when an agent crosses a whole-year boundary,

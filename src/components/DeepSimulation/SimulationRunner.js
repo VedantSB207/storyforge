@@ -18,6 +18,7 @@ import {
   depleteNeeds,
   mortalityCheck,
   maybeLogAgingMilestone,
+  computeEmotionalState,    // Phase 7/7b — per-round emotion
 } from './stateUpdaters.js'
 import { initialisePositions } from './positionGraph.js'
 import { tagExceptionalPerception } from './witnessRules.js'
@@ -136,6 +137,15 @@ export async function* runSimulationRounds({
 
   let allEvents = []
 
+  // Phase 7/7b — emotion snapshots.
+  //   bound:   per-round, per-agent map of {stress,contentment,grief,dominantEmotion}
+  //            (only for source==='bound' agents — small count, always kept)
+  //   npc:     per-round aggregate across procedural agents (cheap, always kept)
+  //   prev:    last round's bound emotions, used by computeEmotionalState for
+  //            carry-over decay so swings aren't instantaneous each round
+  const emotionSnapshots = []
+  const prevEmotionByAgent = Object.create(null)
+
   for (let round = 1; round <= roundCount; round++) {
     // Phase 6/6a-ii: worldRules ride along in ctx so updaters can read aging
     // behaviour + per-need multipliers + custom narrative rules without
@@ -251,6 +261,47 @@ export async function* runSimulationRounds({
       for (const a of agents) decayBonds(a, round)
     }
 
+    // ── 10. Phase 7/7b — emotion snapshots ──────────────────────────────
+    // Build a small index of this round's events by agentId / targetId so
+    // computeEmotionalState can scan only events touching the agent.
+    const boundSnap = {}
+    let npcSumStress = 0, npcSumContent = 0, npcSumGrief = 0
+    let npcCount = 0
+    const npcEmotionCounts = Object.create(null)
+    for (const a of agents) {
+      if (!a.alive) continue   // dead agents don't get a per-round emotion
+      // roundEvents passed in full (cheap — usually small enough that filter
+      // inside computeEmotionalState is fine; we don't pre-index because the
+      // function's scan is O(events) per agent and roundEvents stays modest).
+      const prev = prevEmotionByAgent[a.id] || null
+      const emo = computeEmotionalState(a, ctx, roundEvents, prev)
+      // Mirror to the agent so downstream code (and the Phase 4 emotion field)
+      // sees the same dominantEmotion label.
+      a.stress     = emo.stress
+      a.emotion    = emo.dominantEmotion
+      prevEmotionByAgent[a.id] = emo
+      if (a.source === 'bound') {
+        boundSnap[a.id] = { ...emo, name: a.name }
+      } else {
+        npcSumStress  += emo.stress
+        npcSumContent += emo.contentment
+        npcSumGrief   += emo.grief
+        npcCount      += 1
+        npcEmotionCounts[emo.dominantEmotion] = (npcEmotionCounts[emo.dominantEmotion] || 0) + 1
+      }
+    }
+    emotionSnapshots.push({
+      round,
+      bound: boundSnap,
+      npc: npcCount === 0 ? null : {
+        meanStress:      +(npcSumStress / npcCount).toFixed(3),
+        meanContentment: +(npcSumContent / npcCount).toFixed(3),
+        meanGrief:       +(npcSumGrief / npcCount).toFixed(3),
+        dominantEmotionCounts: npcEmotionCounts,
+        count: npcCount,
+      },
+    })
+
     allEvents = allEvents.concat(roundEvents)
 
     if (round % yieldEvery === 0 || round === roundCount) {
@@ -266,6 +317,7 @@ export async function* runSimulationRounds({
         llmCallsThisRound: propResult.llmCallsThisRound,
         tierCounters: { ...tierCounters },
         actionCounts: { ...actionCounts },
+        emotionSnapshots,           // Phase 7/7b — full history so far
         progress: round / roundCount,
       }
     }
@@ -303,7 +355,8 @@ export async function* runSimulationRounds({
         ? Promise.resolve({ themes: [], usage: null, cost: 0 })
         : detectThemes({ events: allEvents, agents, dialogues, roundCount, timeUnit }).catch(e => ({ error: e.message || String(e), themes: [], usage: null, cost: 0 })),
     ])
-    const weather = computeEmotionalWeather({ events: allEvents, agents, roundCount })
+    // Phase 7/7b — pass the real snapshots so the chart reads measured data
+    const weather = computeEmotionalWeather({ events: allEvents, agents, roundCount, emotionSnapshots })
     const totalInsightCost = (blindSpotsRes.cost || 0) + (promoRes.cost || 0) + (themesRes.cost || 0)
     insights = {
       blindSpots:          blindSpotsRes,
@@ -330,6 +383,7 @@ export async function* runSimulationRounds({
     actionCounts: { ...actionCounts },
     dialogues,
     insights,           // Phase 6/6d
+    emotionSnapshots,   // Phase 7/7b — full per-round emotion history
     progress: 1,
     final: true,
   }

@@ -72,6 +72,7 @@ async function runVariant({ variantIndex, baseSeed, chars, lore, taxonomy, castS
     llmUsageAll:    lastSnap.llmUsageAll,
     dialogues:      lastSnap.dialogues || [],
     insights:       lastSnap.insights || null,        // Phase 6/6d
+    emotionSnapshots: lastSnap.emotionSnapshots || null,   // Phase 7/7b
   }
 }
 
