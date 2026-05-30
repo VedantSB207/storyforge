@@ -35,6 +35,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   libraryReadFile:   (filePath)                          => ipcRenderer.invoke('library-read-file', filePath),
   saveFileDialog:    (defaultName, dataBase64, filters)  => ipcRenderer.invoke('save-file-dialog', { defaultName, dataBase64, filters }),
 
+  // ── Deep Simulation per-run storage (Phase 3.5) ──────────────────────────
+  saveDeepSimResult:   (projectId, simId, fullResult)    => ipcRenderer.invoke('save-deep-sim-result',   { projectId, simId, fullResult }),
+  loadDeepSimResult:   (projectId, simId)                => ipcRenderer.invoke('load-deep-sim-result',   { projectId, simId }),
+  listDeepSimResults:  (projectId)                       => ipcRenderer.invoke('list-deep-sim-results',  projectId),
+  deleteDeepSimResult: (projectId, simId)                => ipcRenderer.invoke('delete-deep-sim-result', { projectId, simId }),
+
+  // ── Phase 4b/4 — Scenario persistence ────────────────────────────────────
+  saveScenarioResult:  (projectId, scenarioId, scenarioRecord) => ipcRenderer.invoke('save-scenario-result',  { projectId, scenarioId, scenarioRecord }),
+  loadScenarioResult:  (projectId, scenarioId)                 => ipcRenderer.invoke('load-scenario-result',  { projectId, scenarioId }),
+  listScenarioResults: (projectId)                             => ipcRenderer.invoke('list-scenario-results', projectId),
+
+  // ── Ollama (Phase 4a) ────────────────────────────────────────────────────
+  queryOllama:        (params)                           => ipcRenderer.invoke('query-ollama', params),
+
   // Platform flag — lets React know it's running inside Electron
   platform: process.platform,
 })

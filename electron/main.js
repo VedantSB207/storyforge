@@ -77,6 +77,13 @@ ipcMain.handle('call-claude', async (_, payload) => {
   const apiKey = store.get('apiKey')
   if (!apiKey) return { error: 'no_key', message: 'API key not set. Go to Settings to add it.' }
 
+  // Phase 4b.1: hard 60s timeout via AbortController. Without this, a stalled
+  // HTTP/2 connection (which happened mid-Scenario when credits hit zero —
+  // Anthropic accepted the TCP connection but never wrote a 400 response body)
+  // hung the whole simulation indefinitely. AbortController guarantees the
+  // promise resolves one way or the other within 60s.
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 60_000)
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -86,13 +93,17 @@ ipcMain.handle('call-claude', async (_, payload) => {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify(payload),
+      signal: controller.signal,
     })
+    clearTimeout(timeoutId)
     const data = await response.json()
     if (!response.ok) {
       return { error: 'api', message: data?.error?.message || `API returned ${response.status}`, status: response.status }
     }
     return data
   } catch (err) {
+    clearTimeout(timeoutId)
+    if (err.name === 'AbortError') return { error: 'timeout', message: 'Claude API call exceeded 60s timeout' }
     return { error: 'network', message: err.message }
   }
 })
@@ -204,6 +215,146 @@ ipcMain.handle('delete-project', (_, id) => {
 
 // Get userData path (so writer can find their files if needed)
 ipcMain.handle('get-data-path', () => app.getPath('userData'))
+
+// ── IPC: Ollama (Phase 4a) ───────────────────────────────────────────────────
+// HTTP wrapper around an Ollama server (local or VPS). The renderer never
+// touches the URL directly — keeps CORS clean and lets the URL be configured
+// server-side. Health-check mode pings /api/tags; decision mode posts to
+// /api/generate with stream:false and short JSON response.
+//
+// Never throws. Returns { ok, response?, error? } envelope.
+ipcMain.handle('query-ollama', async (_, { url, model, prompt, healthCheck, timeout }) => {
+  const controller = new AbortController()
+  const tid = setTimeout(() => controller.abort(), timeout || 10000)
+  try {
+    if (healthCheck) {
+      const res = await fetch(`${url}/api/tags`, { signal: controller.signal })
+      clearTimeout(tid)
+      if (!res.ok) return { ok: false, error: `health_check_${res.status}` }
+      return { ok: true }
+    }
+    const res = await fetch(`${url}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        format: 'json',
+        options: { temperature: 0.7, num_predict: 120 },
+      }),
+      signal: controller.signal,
+    })
+    clearTimeout(tid)
+    if (!res.ok) return { ok: false, error: `http_${res.status}` }
+    const data = await res.json()
+    return { ok: true, response: data?.response || '' }
+  } catch (err) {
+    clearTimeout(tid)
+    if (err.name === 'AbortError') return { ok: false, error: 'timeout' }
+    return { ok: false, error: err.message || 'unknown' }
+  }
+})
+
+// ── IPC: Deep Simulation per-run storage (Phase 3.5) ─────────────────────────
+// Storage location: <userData>/projects/<projectId>/deep-sims/<simId>.json
+// Rationale: nests under the existing per-project subdir (same place library
+// files live). Each simulation result is its own file so the project JSON
+// stays small — heavy data (full agent Knowledge, event log, butterfly trace)
+// only loads when the writer opens that simulation's result panel.
+const getDeepSimDir = (projectId) => {
+  const dir = path.join(projectsDir, projectId, 'deep-sims')
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+ipcMain.handle('save-deep-sim-result', (_, { projectId, simId, fullResult }) => {
+  try {
+    const dir = getDeepSimDir(projectId)
+    const filePath = path.join(dir, `${simId}.json`)
+    fs.writeFileSync(filePath, JSON.stringify(fullResult, null, 2), 'utf8')
+    const stats = fs.statSync(filePath)
+    return { ok: true, path: filePath, size: stats.size }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
+ipcMain.handle('load-deep-sim-result', (_, { projectId, simId }) => {
+  try {
+    const filePath = path.join(projectsDir, projectId, 'deep-sims', `${simId}.json`)
+    if (!fs.existsSync(filePath)) return { ok: false, error: 'not_found' }
+    return { ok: true, fullResult: JSON.parse(fs.readFileSync(filePath, 'utf8')) }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
+ipcMain.handle('list-deep-sim-results', (_, projectId) => {
+  try {
+    const dir = path.join(projectsDir, projectId, 'deep-sims')
+    if (!fs.existsSync(dir)) return { ok: true, files: [] }
+    const files = fs.readdirSync(dir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => {
+        const stats = fs.statSync(path.join(dir, f))
+        return { simId: f.replace(/\.json$/, ''), size: stats.size, mtime: stats.mtime.toISOString() }
+      })
+    return { ok: true, files }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
+ipcMain.handle('delete-deep-sim-result', (_, { projectId, simId }) => {
+  try {
+    const filePath = path.join(projectsDir, projectId, 'deep-sims', `${simId}.json`)
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
+// ── Phase 4b/4 — Scenario wrapper persistence ────────────────────────────
+// Scenario records are small (metadata + comparison + variant ID refs);
+// each variant's full result is saved via save-deep-sim-result.
+ipcMain.handle('save-scenario-result', (_, { projectId, scenarioId, scenarioRecord }) => {
+  try {
+    const dir = getDeepSimDir(projectId)
+    const filePath = path.join(dir, `${scenarioId}.scenario.json`)
+    fs.writeFileSync(filePath, JSON.stringify(scenarioRecord, null, 2), 'utf8')
+    return { ok: true, path: filePath, size: fs.statSync(filePath).size }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
+ipcMain.handle('load-scenario-result', (_, { projectId, scenarioId }) => {
+  try {
+    const filePath = path.join(projectsDir, projectId, 'deep-sims', `${scenarioId}.scenario.json`)
+    if (!fs.existsSync(filePath)) return { ok: false, error: 'not_found' }
+    return { ok: true, scenarioRecord: JSON.parse(fs.readFileSync(filePath, 'utf8')) }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
+ipcMain.handle('list-scenario-results', (_, projectId) => {
+  try {
+    const dir = path.join(projectsDir, projectId, 'deep-sims')
+    if (!fs.existsSync(dir)) return { ok: true, files: [] }
+    const files = fs.readdirSync(dir)
+      .filter(f => f.endsWith('.scenario.json'))
+      .map(f => {
+        const stats = fs.statSync(path.join(dir, f))
+        return { scenarioId: f.replace(/\.scenario\.json$/, ''), size: stats.size, mtime: stats.mtime.toISOString() }
+      })
+    return { ok: true, files }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
 
 // ── IPC: Project File Library ────────────────────────────────────────────────
 const getLibraryDir = (projectId) => {

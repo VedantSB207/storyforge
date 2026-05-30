@@ -13,6 +13,9 @@ import { Capture } from "./components/Capture.jsx";
 import { LibraryPanel } from "./components/LibraryPanel.jsx";
 import { ImportAnalyse } from "./components/ImportAnalyse.jsx";
 import { AIAssistant } from "./components/AIAssistant.jsx";
+import { DeepSimulation } from "./components/DeepSimulation/DeepSimulation.jsx";
+import { WorldRulesPanel } from "./components/WorldRules/WorldRulesPanel.jsx";
+import { DEFAULT_WORLD_RULES, withDefaults as withWorldRulesDefaults } from "./components/WorldRules/worldRulesSchema.js";
 
 /* ── API KEY SETUP SCREEN ── */
 function ApiKeySetup({ onSave }) {
@@ -79,6 +82,12 @@ export default function StoryForge() {
   const [simulationCount, setSimulationCount] = useState(0);
   const [lastSimulation, setLastSimulation] = useState(null);
   const [selectedArc, setSelectedArc] = useState('discover');
+  const [deepSimulationHistory, setDeepSimulationHistory] = useState([]);
+  // Phase 6/6a-i: project-level story snapshot + cached hydration data
+  const [storySnapshot, setStorySnapshot] = useState('');
+  const [hydrationData, setHydrationData] = useState(null);
+  // Phase 6/6a-ii: project-level world rules (aging, lifespan, narrative)
+  const [worldRules, setWorldRules] = useState(() => withWorldRulesDefaults(null));
 
   // ── Tab switch handler (persists lastTab)
   const switchTab = (tabId) => {
@@ -104,8 +113,11 @@ export default function StoryForge() {
       lastTab: tab,
       selectedArc, simulationCount, lastSimulation,
       timelineChapters, contFlags,
+      deepSimulationHistory,
+      storySnapshot, hydrationData,
+      worldRules,
     });
-  }, [project, chars, lore, relationships, manuscript, tab, selectedArc, simulationCount, lastSimulation, timelineChapters, contFlags]);
+  }, [project, chars, lore, relationships, manuscript, tab, selectedArc, simulationCount, lastSimulation, timelineChapters, contFlags, deepSimulationHistory, storySnapshot, hydrationData, worldRules]);
 
   // ── Open project: load its saved data
   const openProject = async (p) => {
@@ -122,6 +134,12 @@ export default function StoryForge() {
         setLastSimulation(data.lastSimulation || null);
         setTimelineChapters(data.timelineChapters || []);
         setContFlags(data.contFlags || []);
+        setDeepSimulationHistory(data.deepSimulationHistory || []);
+        // Phase 6/6a-i: hydrate the snapshot + cached hydration data
+        setStorySnapshot(data.storySnapshot || '');
+        setHydrationData(data.hydrationData || null);
+        // Phase 6/6a-ii: load world rules with default fallback for old projects
+        setWorldRules(withWorldRulesDefaults(data.worldRules || null));
       }
     }
     setProject(p);
@@ -150,8 +168,10 @@ export default function StoryForge() {
     {id:'dashboard',  label:'Dashboard'},
     {id:'write',      label:'Write'},
     {id:'mindmap',    label:'Mindmap'},
-    {id:'simulation', label:'\u2726 Simulation', hi:true},
+    {id:'simulation', label:'\u2726 Quick Scenario', hi:true},
+    {id:'deepsim',    label:'\u2726 Deep Simulation', hi:true},
     {id:'bible',      label:'Story Bible'},
+    {id:'worldrules', label:'World Rules'},
     {id:'relweb',     label:'Relationship Web'},
     {id:'timeline',   label:'Timeline'},
     {id:'import',     label:'Import & Analyse'},
@@ -237,7 +257,9 @@ export default function StoryForge() {
         {tab==='write'     && <WritingPanel project={project} chars={chars} lore={lore} manuscript={manuscript} setManuscript={setManuscript}/>}
         {tab==='mindmap'   && <MindMap projectTitle={project.title} chars={chars} importedEdges={importedEdges}/>}
         {tab==='simulation'&& <SimPanel chars={chars} lore={lore} setSimulationCount={setSimulationCount} setLastSimulation={setLastSimulation}/>}
-        {tab==='bible'     && <StoryBible chars={chars} setChars={setChars} lore={lore} setLore={setLore}/>}
+        {tab==='deepsim'   && <DeepSimulation project={project} chars={chars} lore={lore} timelineChapters={timelineChapters} relationships={relationships} deepSimulationHistory={deepSimulationHistory} setDeepSimulationHistory={setDeepSimulationHistory} setTab={switchTab} storySnapshot={storySnapshot} hydrationData={hydrationData} setHydrationData={setHydrationData} worldRules={worldRules}/>}
+        {tab==='bible'     && <StoryBible chars={chars} setChars={setChars} lore={lore} setLore={setLore} storySnapshot={storySnapshot} setStorySnapshot={setStorySnapshot}/>}
+        {tab==='worldrules'&& <WorldRulesPanel worldRules={worldRules} setWorldRules={setWorldRules} chars={chars}/>}
         {tab==='relweb'    && <RelationshipWeb chars={chars} relationships={relationships} setRelationships={setRelationships} setRelNodes={setRelNodes} setRelEdges={setRelEdges}/>}
         {tab==='timeline'  && <Timeline project={project} timelineChapters={timelineChapters} setTimelineChapters={setTimelineChapters} contFlags={contFlags} setContFlags={setContFlags}/>}
         {tab==='import'    && <ImportAnalyse chars={chars} setChars={setChars} lore={lore} setLore={setLore} project={project} setImportedEdges={setImportedEdges} setTab={switchTab} setManuscript={setManuscript}/>}

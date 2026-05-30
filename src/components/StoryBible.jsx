@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { C, genId } from "../constants.js";
 
-export function StoryBible({ chars, setChars, lore, setLore }) {
+export function StoryBible({ chars, setChars, lore, setLore, storySnapshot = '', setStorySnapshot = () => {} }) {
   const [addCh, setAddCh] = useState(false);
   const [addLr, setAddLr] = useState(false);
   const [nc, setNc] = useState({name:'',species:'',role:'',traits:'',stakes:'',secrets:'',contradictions:''});
   const [nl, setNl] = useState({cat:'Lore',rule:''});
   const [exp, setExp] = useState(null);
+  const [localSnapshot, setLocalSnapshot] = useState(storySnapshot);
 
   const F = ({label,k,placeholder,multi,obj,set}) => (
     <div style={{marginBottom:'10px'}}>
@@ -23,6 +24,20 @@ export function StoryBible({ chars, setChars, lore, setLore }) {
 
   return (
     <div style={{padding:'20px',maxWidth:'720px',margin:'0 auto'}}>
+      {/* Phase 6/6a-i — Story State */}
+      <div style={{marginBottom:'28px'}}>
+        <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginBottom:'8px'}}>
+          <h2 style={{margin:0,fontSize:'16px'}}>Story State</h2>
+          <span style={{fontSize:'10px',color:C.muted,fontFamily:'system-ui',fontStyle:'italic'}}>The moment Deep Simulation projects forward from</span>
+        </div>
+        <textarea
+          value={localSnapshot}
+          onChange={e => setLocalSnapshot(e.target.value)}
+          onBlur={() => { if (localSnapshot !== storySnapshot) setStorySnapshot(localSnapshot); }}
+          placeholder="Describe where your story is right now. Example: 'Jojo and his companions have just learned Garm has disappeared. They're gathered in the central city deciding whether to chase the trail or wait. The Witch's spies are already moving.'"
+          style={{width:'100%',minHeight:'90px',padding:'10px 12px',backgroundColor:C.bg,border:`1px solid ${C.borderMid}`,borderRadius:'5px',color:C.parch,fontSize:'13px',outline:'none',fontFamily:'Georgia,serif',resize:'vertical',boxSizing:'border-box',lineHeight:'1.6'}}/>
+      </div>
+
       <div style={{marginBottom:'28px'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px'}}>
           <h2 style={{margin:0,fontSize:'16px'}}>Characters</h2>
