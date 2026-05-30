@@ -123,12 +123,16 @@ export function estimateRunCost({
   totalLow  = totalMid * 0.7
   totalHigh = totalMid * 1.3
 
+  // Phase 6/6e — two-tier cost warning.
+  //   notice : highEstimate > $1  → "heads up, this is more than pocket change"
+  //   warn   : highEstimate > $5  → "this is a heavy run, reconsider"
   return {
     lowEstimate:  +totalLow.toFixed(4),
     highEstimate: +totalHigh.toFixed(4),
     midEstimate:  +totalMid.toFixed(4),
     breakdown,
-    warn: totalHigh > 5,
+    notice: totalHigh > 1,
+    warn:   totalHigh > 5,
   }
 }
 

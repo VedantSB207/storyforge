@@ -1143,21 +1143,29 @@ export function DeepSimulation({
                 : 'Run Simulation →'}
         </button>
 
-        {/* Phase 6/6c — pre-launch cost estimate */}
+        {/* Phase 6/6c — pre-launch cost estimate, Phase 6/6e two-tier alert */}
         {boundCount > 0 && taxonomy && (
           <div style={{ marginTop: 8, fontSize: 11, color: C.muted, fontFamily: 'system-ui', textAlign: 'center' }}>
             Estimated cost:{' '}
-            <span style={{ color: costEstimate.warn ? C.accBright : C.parch, fontWeight: 500 }}>
+            <span style={{ color: costEstimate.warn ? C.accBright : costEstimate.notice ? C.gold : C.parch, fontWeight: 500 }}>
               {formatEstimateRange(costEstimate)}
             </span>
             {' · mid ~'}<span style={{ color: C.parch }}>${costEstimate.midEstimate.toFixed(2)}</span>
           </div>
         )}
 
+        {/* Tier 2 — strong warning at $5+ */}
         {costEstimate.warn && boundCount > 0 && taxonomy && (
           <div style={{ marginTop: 10, padding: '10px 12px', backgroundColor: C.accBright + '12', border: `1px solid ${C.accBright}55`, borderRadius: 5, fontSize: 11, color: C.accBright, fontFamily: 'system-ui', lineHeight: 1.5 }}>
-            <strong>High-cost run.</strong> This configuration could cost up to ${costEstimate.highEstimate.toFixed(2)}.
+            <strong>⚠ High-cost run.</strong> This configuration could cost up to ${costEstimate.highEstimate.toFixed(2)}.
             Consider reducing cast size, round count, or variant count before running.
+          </div>
+        )}
+
+        {/* Tier 1 — heads-up at $1+ (only when the stronger warning isn't already showing) */}
+        {!costEstimate.warn && costEstimate.notice && boundCount > 0 && taxonomy && (
+          <div style={{ marginTop: 10, padding: '10px 12px', backgroundColor: C.gold + '12', border: `1px solid ${C.gold}55`, borderRadius: 5, fontSize: 11, color: C.gold, fontFamily: 'system-ui', lineHeight: 1.5 }}>
+            <strong>Heads up:</strong> this run could cost up to ${costEstimate.highEstimate.toFixed(2)}. Adjust cast size, rounds, or variants to reduce.
           </div>
         )}
 

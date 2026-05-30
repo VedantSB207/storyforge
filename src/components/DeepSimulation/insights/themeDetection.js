@@ -23,6 +23,8 @@ Read the events and bonds below. Identify 3–5 themes that emerge naturally. Fo
 
 Be honest. If a theme didn't truly emerge, skip it. Better 3 real themes than 5 padded ones.
 
+IMPORTANT: characters with similar or identical names may be intentionally distinct — writers sometimes use shared names deliberately, and the cast may include multiple kinds (e.g. a vampire dog Nyra and a separate human assassin named Nyra). Do not infer thematic connections from shared names alone; require other evidence (shared scenes, mirrored arcs, explicit reference) before treating a name overlap as meaningful.
+
 Return ONLY a JSON object:
 
 {
