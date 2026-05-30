@@ -1,8 +1,8 @@
 # StoryForge Deep Simulation Engine
 ## Implementation Design Document
 
-**Version 1.10**
-**Branch:** `deep-simulation-rebuild`
+**Version 1.11**
+**Branch:** `character-psychology`
 **Document location in repo:** `docs/SIMULATION_ENGINE_DESIGN.md`
 
 ---
@@ -751,6 +751,46 @@ Additionally, the difficulty preset from Phase 5 is replaced by **Story-Scale Pr
 
 ---
 
+## Section 8 — Character Psychology Engine (Phase 7)
+
+Every character carries a psychological profile that biases their decisions across the entire simulation. The profile uses a hybrid model: **Enneagram is the writer-facing interface; validated continuous models are the engine.**
+
+- The writer selects (or the AI infers) an **Enneagram type + wing + health level** — familiar, evocative, narratively rich.
+- That selection maps to the simulation's actual machinery: a **Big Five (OCEAN)** distribution, an **attachment style** (secure / anxious / avoidant / fearful), and **antagonist markers** (narcissism, Machiavellianism, callousness, vengefulness).
+- The Enneagram **health level** modulates the antagonist markers — a healthy Type 8 is protective and decisive; an unhealthy Type 8 is domineering and vengeful.
+- The writer can fine-tune any underlying value after the mapping. The Enneagram is the human-readable label; the simulation computes only on the continuous values.
+
+Profiles bias probabilities, they do not script outcomes. A high-vengefulness character is *more likely* to seek revenge, never guaranteed to. A per-project **psychological influence** dial in World Rules controls how strongly psychology shapes behavior (0 = ignored, 1 = strong, default 0.6). This preserves StoryForge's core identity: a narrative physics engine, not a ghostwriter. Psychology is gravity, not fate.
+
+Main characters get a profile via writer choice (questionnaire or AI inference). NPCs draw from a genre-aware pool of psychological archetypes, assigned deterministically from the seeded RNG so simulation determinism holds.
+
+### Pipeline
+1. **Writer enters a character in Story Bible.** When introducing or editing, a "Psychology" step appears with a toggle: *Answer a few questions* (no LLM, scoring table) vs *Let AI infer from the profile* (one Sonnet call, ~$0.01–0.02, cached on the character).
+2. Either path produces an Enneagram **type + wing + health level**.
+3. The pure `enneagramMapper` derives **Big Five + attachment + markers**.
+4. The writer reviews in `PsychologyReview` — sliders for the underlying values, "reset to mapped" per dial, manual override flips `source` to `'manual'`.
+5. `AgentFactory` applies the stored profile to bound agents at sim start.
+6. `NPCGenerator` calls `npcArchetypePool.assignArchetypes` to seed each procedural NPC from the genre-weighted pool.
+7. `decisionLogic` nudges action-selection probabilities by the agent's profile, scaled by the World Rules influence dial. Tier 2 prompts include `describeProfile(agent.psychology)` so Sonnet reasons in-character.
+
+### Determinism guarantee
+Psychology must preserve the simulation's determinism: archetype assignment uses the seeded RNG, the mapper is pure, and `disableLLM:true` continues to produce byte-identical runs (inference is skipped; profiles come from stored/questionnaire/pool data).
+
+---
+
+## Section 9 — Emotional Depth (Phase 7)
+
+Building on the psychology layer, Phase 7 adds emotional continuity:
+
+- **Emotion snapshots** — the runner records each character's emotional state per round, replacing the interpolated approximation used by the Emotional Weather panel. This gives grief and other long-running emotions a real trajectory to attach to.
+- **Memorial bonds** — when a bonded character dies, the survivor's bond toward them persists, flagged `memorial: true` with `memorialSince` (the round it became memorial) and `preMemorialType` (the original bond type, preserved). How that memorial bond decays or intensifies, and how it influences the survivor's decisions, is a function of the survivor's psychology. An anxious-attachment, high-neuroticism character may spiral; an avoidant, high-conscientiousness character may channel grief into purpose. The same loss produces different stories in different characters — exactly as in life.
+
+Memorial bonds also instantiate at hydration when a bonded Bible character has status `dead` (so a story that opens with a grieving survivor starts the simulation already grieving). Memorial conversion, per-round update, and behavior selection are deterministic from state + psychology; `disableLLM:true` byte-identical holds.
+
+The core (7a–7c) lands these three pieces. Grief stages, anniversary effects, trauma persistence, and survivor's guilt are explicitly **out of Phase 7 scope** — they are decided after the core is felt in real runs.
+
+---
+
 ## End of document
 
 When this document is updated by future Claude Code sessions, the version number at the top is incremented and a brief changelog is added to the bottom.
@@ -798,6 +838,8 @@ When this document is updated by future Claude Code sessions, the version number
 - **6e Final polish** — per-character narrative arc button (on-demand Sonnet ~$0.01/click), tooltips on every Phase 6 setup control, first-time welcome banner with per-project localStorage dismissal, Emotional Weather disclaimer (interpolation honesty), Themes prompt warns against shared-name hallucinations, cost warning now two-tier ($1 heads-up gold, $5 strong red). Hydration sacred-edits architecture verified.
 
 After v1.10, `deep-simulation-rebuild` is ready for merge into `main`.
+
+**Version 1.11** — Phase 7: Character Psychology Engine (Enneagram-interface hybrid over Big Five + attachment + antagonist markers, writer questionnaire or AI inference, NPC archetype pool, psychology drives all decisions). Emotion snapshots (real per-round emotional trajectory). Memorial bonds (psychology-driven grief). Three core workstreams (7a / 7b / 7c) with hard stops; grief & trauma mechanics (7d) and time-based effects (7e) deferred until the core is felt in real runs.
 
 ---
 
