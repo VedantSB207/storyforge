@@ -109,6 +109,9 @@ export const DEFAULT_WORLD_RULES = Object.freeze({
   globalLifespanMultiplier: 1.0,
   customNarrativeRules:     '',
   narrativeScale:           NARRATIVE_SCALE_DEFAULT, // 'thriller' | 'drama' | 'novel' | 'saga' | 'epic'
+  // Phase 7/7a — How strongly per-character psychology biases decisions.
+  // 0 = psychology ignored (Phase 6 behaviour), 1 = strong biasing, 0.6 default.
+  psychologicalInfluence:   0.6,
 })
 
 // Merge a partial/legacy worldRules onto the defaults so missing fields
@@ -131,6 +134,7 @@ export function withDefaults(partial = null) {
     globalLifespanMultiplier: Number.isFinite(partial.globalLifespanMultiplier) ? partial.globalLifespanMultiplier : 1.0,
     customNarrativeRules:     typeof partial.customNarrativeRules === 'string' ? partial.customNarrativeRules : '',
     narrativeScale:           NARRATIVE_SCALE_PRESETS[partial.narrativeScale] ? partial.narrativeScale : NARRATIVE_SCALE_DEFAULT,
+    psychologicalInfluence:   Number.isFinite(partial.psychologicalInfluence) ? Math.min(1, Math.max(0, partial.psychologicalInfluence)) : 0.6,
   }
 }
 

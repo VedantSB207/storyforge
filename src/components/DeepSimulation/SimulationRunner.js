@@ -161,7 +161,9 @@ export async function* runSimulationRounds({
     for (const a of agents) agentById[a.id] = a
 
     // World object passed to action / decision logic
-    const world = { round, agents, agentById, positionState }
+    // Phase 7/7a — worldRules ride on `world` so decisionLogic can read the
+    // psychologicalInfluence dial without an extra parameter through every callsite.
+    const world = { round, agents, agentById, positionState, worldRules }
 
     // ── 3-4. Decide + resolve actions for living agents (Phase 4b: batched) ──
     const actionEvents = []

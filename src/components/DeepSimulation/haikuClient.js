@@ -11,6 +11,7 @@
 // this caps Tier 1 spend at ~$0.16 worst case.
 
 import { callClaude } from '../../api.js'
+import { describeProfile } from '../Psychology/enneagramMapper.js'
 
 export const HAIKU_MODEL       = 'claude-haiku-4-5-20251001'
 export const HAIKU_MAX_TOKENS  = 200
@@ -30,11 +31,17 @@ function buildPrompt(agent, available, world) {
     .map(k => `"${k.content}" (conf ${(k.confidence ?? 0).toFixed(2)})`)
     .join('; ') || 'none'
 
+  // Phase 7/7a — inject one-line psychology summary so Haiku picks
+  // in-character. Empty when no profile (Phase 6 behaviour).
+  const psychLine = agent?.psychology?.enneagram?.type
+    ? `Psychology: ${describeProfile(agent.psychology)}\n`
+    : ''
+
   return `You are picking the next action for one character in a writer's simulation. Reply with ONLY JSON, no preamble.
 
 Character: ${agent.name} (${agent.genreTag || 'bound'})
 Traits: ${(agent.traits || []).slice(0, 5).join(', ') || 'none'}
-Region: ${agent.region}
+${psychLine}Region: ${agent.region}
 Needs (0-1, lower=desperate): physiological=${(needs.physiological ?? 0).toFixed(2)}, safety=${(needs.safety ?? 0).toFixed(2)}, belonging=${(needs.belonging ?? 0).toFixed(2)}, esteem=${(needs.esteem ?? 0).toFixed(2)}, purpose=${(needs.purpose ?? 0).toFixed(2)}
 Health=${(agent.health ?? 1).toFixed(2)}, stress=${(agent.stress ?? 0).toFixed(2)}
 Bonds: ${bonds}

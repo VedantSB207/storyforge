@@ -4,6 +4,7 @@
 
 import { GENERIC_VALUES, GENERIC_FEARS } from './deepSimSchema.js'
 import { resolveLifespan } from '../WorldRules/lifespanResolver.js'
+import { freshProfile } from '../Psychology/psychologySchema.js'
 
 // Phase 4a.1: deterministic 6-char base36 id using the seeded rng so two
 // runs with the same seed produce byte-identical agent IDs. Previously
@@ -129,6 +130,11 @@ export function createProceduralAgent({ genreId, kindTemplate, rng = Math.random
 
     // Phase 4a — action history
     actionHistory: [],
+
+    // Phase 7/7a — default psychology profile. CensusManager overlays a
+    // genre-aware archetype assignment after generation so this default is
+    // only used when no taxonomy/archetype pool is available (test paths).
+    psychology: freshProfile(),
   }
 }
 

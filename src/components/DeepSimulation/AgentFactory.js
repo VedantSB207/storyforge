@@ -8,6 +8,7 @@
 // Both get normalised into string[] here so the schema's typing holds.
 
 import { resolveLifespan } from '../WorldRules/lifespanResolver.js'
+import { normaliseProfile, freshProfile } from '../Psychology/psychologySchema.js'
 
 const splitTraits = (s) =>
   String(s || '')
@@ -125,6 +126,13 @@ export function createAgentFromBibleCharacter(char, hydration = null, seededKnow
     status:           status,
     isOffstage:       isOffstage,
     backgroundSummary: eff?.backgroundSummary || '',
+
+    // Phase 7/7a — psychological profile from the Bible character (if set).
+    // Falls back to a fresh DEFAULT_PROFILE so downstream code never NPE's
+    // when reading bigFive/markers/attachment fields.
+    psychology: char?.psychology
+      ? normaliseProfile(char.psychology)
+      : freshProfile(),
 
     // Internal flag set: lets us avoid re-firing the same need_critical event
     // every round once a need is already below threshold

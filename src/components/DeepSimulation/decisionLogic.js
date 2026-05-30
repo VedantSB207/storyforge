@@ -9,6 +9,7 @@
 import { ACTIONS, ACTION_NAMES, availableActions } from './actions.js'
 import { decideViaHaiku, decideBatchViaHaiku } from './haikuClient.js'
 import { callClaude } from '../../api.js'
+import { describeProfile } from '../Psychology/enneagramMapper.js'
 import {
   MAX_TIER1_PER_ROUND,
   MAX_TIER1_PER_SIM,
@@ -100,12 +101,127 @@ export function scoreActionsDeterministic(agent, available, world, rng) {
       score += rng() * 0.30
     }
 
+    // Phase 7/7a — psychology biasing. Probability nudges scaled by the
+    // world's psychologicalInfluence dial (0 = ignored, 1 = strong, default
+    // 0.6). The mapping below mirrors the design doc §8:
+    //   high conscientiousness  → goal-directed (PURSUE_GOAL, BUILD_KNOWLEDGE)
+    //   low  agreeableness +
+    //        high markers       → CONFLICT, BETRAY
+    //   high agreeableness      → COOPERATE, PROTECT (SEEK_BOND/COMMUNICATE)
+    //   high neuroticism        → larger swings under stress
+    //   high extraversion       → social (COMMUNICATE, SEEK_BOND)
+    //   high vengefulness       → CONFLICT/BETRAY when a bonded enemy is present
+    score += psychologyBias(agent, name, world, rng)
+
     // Tiny jitter — stays tiny so a strong dominant action still wins reliably
     score += rng() * 0.05
     scored.push({ action: name, score })
   }
   scored.sort((a, b) => b.score - a.score)
   return scored
+}
+
+// Phase 7/7a — psychology probability nudges. Returns a delta to add to the
+// raw action score. All nudges scale by world.worldRules.psychologicalInfluence
+// (0..1) so the writer's dial directly throttles psychology's strength.
+//
+// All nudges are bounded (≤ ~0.35 absolute) so they bias rather than override
+// the underlying needs/bonds physics. Determinism preserved: no randomness
+// here beyond what the caller already injects via rng().
+function psychologyBias(agent, action, world, rng) {
+  const p = agent?.psychology
+  if (!p || !p.enneagram?.type) return 0
+  const inf = Number(world?.worldRules?.psychologicalInfluence)
+  const W = Number.isFinite(inf) ? Math.min(1, Math.max(0, inf)) : 0.6
+  if (W <= 0) return 0
+
+  const bf = p.bigFive || {}
+  const mk = p.markers || {}
+  const O = Number(bf.openness)        || 0.5
+  const C = Number(bf.conscientiousness)|| 0.5
+  const E = Number(bf.extraversion)    || 0.5
+  const A = Number(bf.agreeableness)   || 0.5
+  const N = Number(bf.neuroticism)     || 0.5
+  const NARC = Number(mk.narcissism)       || 0
+  const MACH = Number(mk.machiavellianism) || 0
+  const CALL = Number(mk.callousness)      || 0
+  const VENG = Number(mk.vengefulness)     || 0
+
+  // Centred deltas: −0.5 to +0.5 around mid. Lets a 0.85 trait give +0.35
+  // and a 0.15 trait give −0.35 cleanly.
+  const cO = O - 0.5, cC = C - 0.5, cE = E - 0.5, cA = A - 0.5, cN = N - 0.5
+
+  let delta = 0
+  switch (action) {
+    case 'COOPERATE':
+    case 'SEEK_BOND':
+    case 'PROTECT':
+      delta += 0.40 * cA               // agreeable → cooperate
+      delta += 0.20 * cE               // extravert → social
+      delta -= 0.35 * CALL             // callous → less cooperation
+      break
+
+    case 'COMMUNICATE':
+      delta += 0.35 * cE               // extravert → talk
+      delta += 0.15 * cA
+      break
+
+    case 'CONFLICT':
+      delta -= 0.30 * cA               // disagreeable → fight
+      delta += 0.25 * (NARC + CALL)    // narcissism + callousness fuel fights
+      delta += 0.20 * VENG             // vengeful → fight
+      break
+
+    case 'BETRAY':
+      delta += 0.30 * MACH             // Machiavellian → betray
+      delta += 0.20 * VENG
+      delta -= 0.30 * cA               // disagreeable → betray
+      break
+
+    case 'PURSUE_GOAL':
+    case 'BUILD_KNOWLEDGE':
+    case 'BUILD':
+      delta += 0.30 * cC               // conscientious → goal work
+      delta += 0.15 * cO               // open → build/explore
+      break
+
+    case 'REST':
+      delta += 0.20 * cN * Math.max(0, (agent.stress ?? 0) - 0.4)  // neurotic + stressed
+      break
+
+    case 'FLEE':
+      delta += 0.20 * cN               // neurotic → flee under pressure
+      delta -= 0.15 * cA * 0           // (no nudge from agreeableness)
+      break
+
+    case 'OBSERVE':
+      // Observers: high openness, low extraversion. Mild.
+      delta += 0.15 * cO
+      delta -= 0.10 * cE
+      break
+
+    case 'TRAVEL':
+      delta += 0.15 * cO               // open → roam
+      delta += 0.10 * cE
+      break
+
+    default:
+      // Unknown actions get no bias — preserves Phase 6 behaviour for any
+      // action the mapping doesn't list.
+      break
+  }
+
+  // Vengeance amplifier: if a known bonded agent with negative trust exists,
+  // boost CONFLICT/BETRAY by an extra vengefulness term.
+  if ((action === 'CONFLICT' || action === 'BETRAY') && VENG > 0.4) {
+    const hasEnemy = Object.values(agent.bonds || {}).some(b => (b.trust ?? 0) < -0.3)
+    if (hasEnemy) delta += 0.20 * VENG
+  }
+
+  // Neuroticism amplifies the magnitude of all biases under stress.
+  if ((agent.stress ?? 0) > 0.5) delta *= (1 + 0.5 * cN)
+
+  return delta * W
 }
 
 // ── Tier classification (Phase 4b: tightened to ~5% Tier 1) ────────────────
@@ -168,16 +284,26 @@ async function decideViaClaude(agent, available, world) {
     const o = world.agentById?.[id]
     return `- ${o?.name || id}: ${b.type}, intensity ${b.intensity?.toFixed(2)}, trust ${b.trust?.toFixed(2)}`
   }).join('\n') || '(none)'
+  // Phase 7/7a — include the agent's psychological profile so Sonnet
+  // reasons in-character. describeProfile produces a single human-readable
+  // line: e.g. "Type 8w7 — The Challenger (8w7, unhealthy · level 8);
+  // attachment: avoidant; traits: outgoing, combative; markers: grandiose,
+  // vengeful." Empty string returned when no profile set (Phase 6 fallback).
+  const psychLine = agent?.psychology?.enneagram?.type
+    ? `Psychology: ${describeProfile(agent.psychology)}\n`
+    : ''
+
   const userContent =
     `Character: ${agent.name} (${agent.genreTag || 'bound'})\n` +
     `Traits: ${(agent.traits || []).join(', ') || '—'}\n` +
+    psychLine +
     `Region: ${agent.region}\n` +
     `Needs (0-1, lower = more desperate): ${JSON.stringify(agent.needs)}\n` +
     `Health: ${agent.health?.toFixed(2)}, stress: ${(agent.stress ?? 0).toFixed(2)}\n` +
     `Recent knowledge:\n${recentKnowledge}\n\n` +
     `Existing bonds:\n${bondsSample}\n\n` +
     `Available actions: ${available.join(', ')}\n` +
-    `Choose the next action.`
+    `Choose the next action that fits who this character is.`
 
   let res
   try {

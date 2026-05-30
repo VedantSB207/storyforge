@@ -185,7 +185,21 @@ export function WorldRulesPanel({ worldRules, setWorldRules, chars = [] }) {
         </Field>
       </Section>
 
-      {/* ── Section 4: Custom Narrative Rules ─────────────────────── */}
+      {/* ── Section 4: Psychological Influence (Phase 7/7a) ─────────── */}
+      <Section title="Psychological Influence" desc="How strongly character psychology biases decisions. 0 = psychology is ignored (Phase 6 behaviour, decisions driven by needs/bonds only). 1 = strong biasing (high-agreeableness characters cooperate noticeably more; high-marker characters conflict noticeably more). 0.6 default — present but never overrides physics.">
+        <Field label={`Influence (${(local.psychologicalInfluence ?? 0.6).toFixed(2)})`}>
+          <input type="range" min={0} max={1} step={0.05}
+            value={local.psychologicalInfluence ?? 0.6}
+            onChange={e => update('psychologicalInfluence', Number(e.target.value))}
+            style={{ width: '100%' }}
+          />
+          <div style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui', fontStyle: 'italic', marginTop: 6 }}>
+            Probability nudge, not a hard override. A character is more <em>likely</em> to act in-character but never guaranteed to.
+          </div>
+        </Field>
+      </Section>
+
+      {/* ── Section 5: Custom Narrative Rules ─────────────────────── */}
       <Section title="Custom Narrative Rules" desc="Free-text rules the chronicler, taxonomy detector, and character inference will honor. Examples: 'Vampires weakened but not killed by sunlight.' 'Werewolf cats are matrilineal.'">
         <textarea
           value={local.customNarrativeRules}

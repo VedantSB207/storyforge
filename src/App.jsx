@@ -258,7 +258,7 @@ export default function StoryForge() {
         {tab==='mindmap'   && <MindMap projectTitle={project.title} chars={chars} importedEdges={importedEdges}/>}
         {tab==='simulation'&& <SimPanel chars={chars} lore={lore} setSimulationCount={setSimulationCount} setLastSimulation={setLastSimulation}/>}
         {tab==='deepsim'   && <DeepSimulation project={project} chars={chars} lore={lore} timelineChapters={timelineChapters} relationships={relationships} deepSimulationHistory={deepSimulationHistory} setDeepSimulationHistory={setDeepSimulationHistory} setTab={switchTab} storySnapshot={storySnapshot} hydrationData={hydrationData} setHydrationData={setHydrationData} worldRules={worldRules}/>}
-        {tab==='bible'     && <StoryBible chars={chars} setChars={setChars} lore={lore} setLore={setLore} storySnapshot={storySnapshot} setStorySnapshot={setStorySnapshot}/>}
+        {tab==='bible'     && <StoryBible chars={chars} setChars={setChars} lore={lore} setLore={setLore} storySnapshot={storySnapshot} setStorySnapshot={setStorySnapshot} worldRules={worldRules}/>}
         {tab==='worldrules'&& <WorldRulesPanel worldRules={worldRules} setWorldRules={setWorldRules} chars={chars}/>}
         {tab==='relweb'    && <RelationshipWeb chars={chars} relationships={relationships} setRelationships={setRelationships} setRelNodes={setRelNodes} setRelEdges={setRelEdges}/>}
         {tab==='timeline'  && <Timeline project={project} timelineChapters={timelineChapters} setTimelineChapters={setTimelineChapters} contFlags={contFlags} setContFlags={setContFlags}/>}

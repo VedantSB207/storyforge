@@ -1,13 +1,52 @@
 import { useState } from "react";
 import { C, genId } from "../constants.js";
+import { CharacterQuestionnaire } from "./Psychology/CharacterQuestionnaire.jsx";
+import { PsychologyReview } from "./Psychology/PsychologyReview.jsx";
+import { inferCharacterPsychology } from "./Psychology/psychologyInference.js";
+import { enneagramHeadline } from "./Psychology/enneagramMapper.js";
 
-export function StoryBible({ chars, setChars, lore, setLore, storySnapshot = '', setStorySnapshot = () => {} }) {
+export function StoryBible({ chars, setChars, lore, setLore, storySnapshot = '', setStorySnapshot = () => {}, worldRules = null }) {
   const [addCh, setAddCh] = useState(false);
   const [addLr, setAddLr] = useState(false);
   const [nc, setNc] = useState({name:'',species:'',role:'',traits:'',stakes:'',secrets:'',contradictions:''});
   const [nl, setNl] = useState({cat:'Lore',rule:''});
   const [exp, setExp] = useState(null);
   const [localSnapshot, setLocalSnapshot] = useState(storySnapshot);
+
+  // Phase 7/7a — Psychology editor modal state
+  // psychState: null | { charId, step: 'choose' | 'questionnaire' | 'review' | 'inferring' | 'error', profile?, error? }
+  const [psychState, setPsychState] = useState(null);
+
+  // Smart default: questionnaire if profile text is thin, inference if it's substantial.
+  const profileTextLen = (c) =>
+    (c?.traits?.length || 0) + (c?.stakes?.length || 0) + (c?.secrets?.length || 0)
+    + (c?.contradictions?.length || 0) + (c?.description?.length || 0);
+
+  const openPsychology = (char) => {
+    setPsychState({ charId: char.id, step: 'choose' });
+  };
+
+  const closePsychology = () => setPsychState(null);
+
+  const runInference = async (char) => {
+    setPsychState(p => ({ ...p, step: 'inferring' }));
+    try {
+      const rulesText = (worldRules?.customNarrativeRules || '').slice(0, 4000);
+      const res = await inferCharacterPsychology({ char, worldRulesText: rulesText });
+      if (!res.ok) {
+        setPsychState(p => ({ ...p, step: 'error', error: res.error }));
+        return;
+      }
+      setPsychState(p => ({ ...p, step: 'review', profile: res.profile }));
+    } catch (err) {
+      setPsychState(p => ({ ...p, step: 'error', error: err.message || String(err) }));
+    }
+  };
+
+  const saveProfile = (char, profile) => {
+    setChars(prev => prev.map(c => c.id === char.id ? { ...c, psychology: profile } : c));
+    closePsychology();
+  };
 
   const F = ({label,k,placeholder,multi,obj,set}) => (
     <div style={{marginBottom:'10px'}}>
@@ -79,10 +118,29 @@ export function StoryBible({ chars, setChars, lore, setLore, storySnapshot = '',
                 <span style={{fontSize:'10px',color:C.muted,fontFamily:'system-ui'}}>{exp===c.id?'▲':'▼'}</span>
               </div>
               {exp===c.id&&(
-                <div style={{marginTop:'12px',borderTop:`1px solid ${C.border}`,paddingTop:'12px',display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
-                  {[['Traits',c.traits,C.mutedLight],['What they stand to lose',c.stakes,C.gold],['Secrets',c.secrets,C.accBright],['Contradictions',c.contradictions,C.purpleLight]].map(([l,v,col])=>v?(
-                    <div key={l}><div style={{fontSize:'9px',color:C.muted,fontFamily:'system-ui',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:'3px'}}>{l}</div><div style={{fontSize:'12px',color:col,fontStyle:'italic',lineHeight:'1.5'}}>{v}</div></div>
-                  ):null)}
+                <div style={{marginTop:'12px',borderTop:`1px solid ${C.border}`,paddingTop:'12px'}} onClick={e=>e.stopPropagation()}>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',marginBottom:'10px'}}>
+                    {[['Traits',c.traits,C.mutedLight],['What they stand to lose',c.stakes,C.gold],['Secrets',c.secrets,C.accBright],['Contradictions',c.contradictions,C.purpleLight]].map(([l,v,col])=>v?(
+                      <div key={l}><div style={{fontSize:'9px',color:C.muted,fontFamily:'system-ui',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:'3px'}}>{l}</div><div style={{fontSize:'12px',color:col,fontStyle:'italic',lineHeight:'1.5'}}>{v}</div></div>
+                    ):null)}
+                  </div>
+                  {/* Phase 7/7a — Psychology block */}
+                  <div style={{borderTop:`1px solid ${C.border}`,paddingTop:'10px',display:'flex',alignItems:'center',gap:'10px'}}>
+                    <span style={{fontSize:'9px',color:C.muted,fontFamily:'system-ui',textTransform:'uppercase',letterSpacing:'0.1em'}}>Psychology</span>
+                    {c.psychology?.enneagram?.type ? (
+                      <span style={{fontSize:'11px',color:C.purpleLight,fontFamily:'system-ui'}}>
+                        {enneagramHeadline(c.psychology)}
+                        {' · '}
+                        <span style={{color:C.muted,fontStyle:'italic'}}>{c.psychology.source}</span>
+                      </span>
+                    ) : (
+                      <span style={{fontSize:'11px',color:C.muted,fontStyle:'italic',fontFamily:'system-ui'}}>not set</span>
+                    )}
+                    <span style={{flex:1}}/>
+                    <button onClick={()=>openPsychology(c)} style={{padding:'4px 10px',fontSize:'10px',fontFamily:'system-ui',backgroundColor:c.psychology?.enneagram?.type?'transparent':C.purple+'22',color:c.psychology?.enneagram?.type?C.muted:C.purpleLight,border:`1px solid ${c.psychology?.enneagram?.type?C.border:C.purple+'66'}`,borderRadius:'3px',cursor:'pointer'}}>
+                      {c.psychology?.enneagram?.type ? 'Edit psychology' : '+ Set psychology'}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -124,6 +182,79 @@ export function StoryBible({ chars, setChars, lore, setLore, storySnapshot = '',
           ))}
         </div>
       </div>
+
+      {/* Phase 7/7a — Psychology modal */}
+      {psychState && (() => {
+        const char = chars.find(c => c.id === psychState.charId);
+        if (!char) return null;
+        return (
+          <div style={{position:'fixed',inset:0,backgroundColor:'rgba(0,0,0,0.6)',display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'40px 20px',overflowY:'auto',zIndex:50}}
+               onClick={(e)=>{ if (e.target === e.currentTarget) closePsychology(); }}>
+            <div style={{backgroundColor:C.bg,border:`1px solid ${C.border}`,borderRadius:'8px',maxWidth:'820px',width:'100%',padding:'20px'}}>
+              {psychState.step === 'choose' && (
+                <div style={{padding:'10px 16px'}}>
+                  <div style={{fontSize:'14px',color:C.purpleLight,fontFamily:'Georgia,serif',marginBottom:'10px'}}>
+                    Psychology for <strong>{char.name}</strong>
+                  </div>
+                  <div style={{fontSize:'12px',color:C.mutedLight,fontFamily:'system-ui',lineHeight:'1.6',marginBottom:'18px'}}>
+                    A psychological profile shapes how this character decides in every scenario.
+                    {profileTextLen(char) > 60
+                      ? ' Their profile text is rich — AI inference is recommended.'
+                      : ' Their profile text is sparse — the questionnaire is recommended.'}
+                  </div>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
+                    <button onClick={()=>setPsychState(p=>({...p,step:'questionnaire'}))}
+                      style={{padding:'14px 18px',backgroundColor:profileTextLen(char)>60?C.bgCard:C.purple,color:profileTextLen(char)>60?C.parch:'#fff',border:`1px solid ${profileTextLen(char)>60?C.border:C.purple}`,borderRadius:'5px',fontSize:'13px',fontFamily:'system-ui',textAlign:'left',cursor:'pointer'}}>
+                      <div style={{fontWeight:600,marginBottom:'4px'}}>Answer a few questions</div>
+                      <div style={{fontSize:'10px',color:profileTextLen(char)>60?C.muted:'#ffffffbb'}}>~10 questions. No LLM. $0.</div>
+                    </button>
+                    <button onClick={()=>runInference(char)}
+                      style={{padding:'14px 18px',backgroundColor:profileTextLen(char)>60?C.purple:C.bgCard,color:profileTextLen(char)>60?'#fff':C.parch,border:`1px solid ${profileTextLen(char)>60?C.purple:C.border}`,borderRadius:'5px',fontSize:'13px',fontFamily:'system-ui',textAlign:'left',cursor:'pointer'}}>
+                      <div style={{fontWeight:600,marginBottom:'4px'}}>Let AI infer from the profile</div>
+                      <div style={{fontSize:'10px',color:profileTextLen(char)>60?'#ffffffbb':C.muted}}>One Sonnet call. ~$0.01–0.02.</div>
+                    </button>
+                  </div>
+                  <div style={{marginTop:'14px',textAlign:'right'}}>
+                    <button onClick={closePsychology} style={{padding:'6px 12px',backgroundColor:'transparent',color:C.muted,border:`1px solid ${C.border}`,borderRadius:'4px',fontSize:'11px',fontFamily:'system-ui',cursor:'pointer'}}>Cancel</button>
+                  </div>
+                </div>
+              )}
+
+              {psychState.step === 'inferring' && (
+                <div style={{padding:'40px',textAlign:'center'}}>
+                  <div style={{fontSize:'13px',color:C.purpleLight,fontFamily:'Georgia,serif',marginBottom:'12px'}}>Reading {char.name}'s profile…</div>
+                  <div style={{display:'inline-block',width:24,height:24,border:`2px solid ${C.purple}33`,borderTopColor:C.purpleLight,borderRadius:'50%',animation:'spin 1s linear infinite'}}/>
+                  <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+                </div>
+              )}
+
+              {psychState.step === 'questionnaire' && (
+                <CharacterQuestionnaire
+                  characterName={char.name}
+                  onComplete={(profile) => setPsychState(p=>({...p,step:'review',profile}))}
+                  onCancel={closePsychology}
+                />
+              )}
+
+              {psychState.step === 'review' && (
+                <PsychologyReview
+                  character={char}
+                  profile={psychState.profile}
+                  onSave={(profile) => saveProfile(char, profile)}
+                  onCancel={closePsychology}
+                />
+              )}
+
+              {psychState.step === 'error' && (
+                <div style={{padding:'24px'}}>
+                  <div style={{fontSize:'12px',color:C.accBright,fontFamily:'system-ui',marginBottom:'10px'}}>Inference failed: {psychState.error}</div>
+                  <button onClick={()=>setPsychState(p=>({...p,step:'choose'}))} style={{padding:'6px 12px',backgroundColor:C.purple+'22',color:C.purpleLight,border:`1px solid ${C.purple}55`,borderRadius:'4px',fontSize:'11px',fontFamily:'system-ui',cursor:'pointer'}}>Try again</button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

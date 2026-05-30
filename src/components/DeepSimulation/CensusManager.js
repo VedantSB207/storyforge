@@ -10,6 +10,7 @@
 import { createAgentsFromBible } from './AgentFactory.js'
 import { generateNPCs } from './NPCGenerator.js'
 import { CENSUS_MULTIPLIER } from './deepSimSchema.js'
+import { assignArchetypes, taxonomyGenres } from '../Psychology/npcArchetypePool.js'
 
 // Build the full census + select the active cast for a simulation run.
 // Returns:
@@ -34,6 +35,17 @@ export function buildCensus({
 }) {
   const boundAgents      = createAgentsFromBible(chars || [], hydration, seededKnowledgeByAgentId, worldRules)
   const proceduralAgents = generateNPCs({ taxonomy, castSize, censusMultiplier, rng, worldRules })
+
+  // Phase 7/7a — assign psychological archetypes to NPCs from the genre-aware
+  // pool. Uses the same seeded RNG so determinism is preserved. The Bible-bound
+  // agents already carry their writer-set profile (or freshProfile if unset).
+  const genres = taxonomyGenres(taxonomy)
+  const archetypeMap = assignArchetypes(proceduralAgents, genres, rng)
+  for (const npc of proceduralAgents) {
+    const profile = archetypeMap[npc.id]
+    if (profile) npc.psychology = profile
+  }
+
   const census           = [...boundAgents, ...proceduralAgents]
 
   // Active cast = all bound + procedural sampled by relevance.
