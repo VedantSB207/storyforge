@@ -273,6 +273,15 @@ export const BOND_SCHEMA = Object.freeze({
   trust:            'number -1 to 1',
   history:          '[{ round, eventType, dIntensity, dTrust }] (last 30)',
   lastUpdatedRound: 'number',
+  // Phase 7/7c — memorial bonds. When the bonded agent dies (or starts dead
+  // at hydration), the survivor's bond toward them is flagged memorial. The
+  // bond keeps its original `type` (love stays love, kinship stays kinship);
+  // `memorial` just marks it as grief, `memorialSince` is the round it
+  // became memorial, `preMemorialType` records the type it had in life.
+  memorial:         'boolean (default false)',
+  memorialSince:    'number | null (round the bonded agent died)',
+  preMemorialType:  "string | null (bond type at moment of death)",
+  grief:            'number 0-1 (survivor grief carried by THIS bond; 7c)',
 })
 
 // Knowledge entry shape — was placeholder in Phase 1, populated in Phase 3.

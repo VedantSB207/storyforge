@@ -191,6 +191,7 @@ function buildOneThread({ agent, agentById, eventsAsActor, eventsAsTarget, dialo
     ageEnd:         agent.age,
     timeline:       dedupedTimeline,
     bondsSummary:   summarizeBonds(agent, agentById),
+    memorials:      summarizeMemorials(agent, agentById),   // Phase 7/7c
     finalNeeds:     { ...(agent.needs || {}) },
     knowledgeCount: (agent.knownFacts || []).length,
     dialogueCount:  (dialoguesByAgentId[agent.id] || []).length,
@@ -201,18 +202,42 @@ function buildOneThread({ agent, agentById, eventsAsActor, eventsAsTarget, dialo
 // Top 5 bonds, by intensity, with the other agent's name + bond detail.
 export function summarizeBonds(agent, agentById = {}) {
   if (!agent.bonds) return []
-  return Object.values(agent.bonds)
-    .sort((a, b) => b.intensity - a.intensity)
+  return Object.entries(agent.bonds)
+    .map(([otherId, b]) => ({ otherId: b.otherId || otherId, b }))
+    .sort((x, y) => y.b.intensity - x.b.intensity)
     .slice(0, 5)
-    .map(b => ({
-      otherId:   b.otherId,
-      otherName: agentById[b.otherId]?.name || b.otherId,
-      otherSource: agentById[b.otherId]?.source || 'unknown',
+    .map(({ otherId, b }) => ({
+      otherId,
+      otherName: agentById[otherId]?.name || otherId,
+      otherSource: agentById[otherId]?.source || 'unknown',
       type:      b.type,
       intensity: b.intensity,
       trust:     b.trust,
       interactions: b.history?.length || 0,
+      // Phase 7/7c — memorial info
+      memorial:  !!b.memorial,
+      grief:     b.memorial ? (b.grief ?? 0) : 0,
+      preMemorialType: b.preMemorialType || null,
     }))
+}
+
+// Phase 7/7c — memorial bonds for the grief indicator (all, not capped at 5).
+export function summarizeMemorials(agent, agentById = {}) {
+  if (!agent.bonds) return []
+  const out = []
+  for (const [otherId, b] of Object.entries(agent.bonds)) {
+    if (!b.memorial) continue
+    out.push({
+      otherId,
+      otherName: agentById[otherId]?.name || otherId,
+      type: b.type,
+      preMemorialType: b.preMemorialType || null,
+      memorialSince: b.memorialSince ?? null,
+      grief: b.grief ?? 0,
+    })
+  }
+  out.sort((a, b) => b.grief - a.grief)
+  return out
 }
 
 // What makes a timeline entry significant enough to show? Currently we

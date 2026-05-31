@@ -79,14 +79,21 @@ export function BondNetwork({ simulationResult }) {
         const firstRound = b.history?.[0]?.round ?? 0
         if (firstRound > round) continue
         if (!enabledTypes.has(typeAtRound)) continue
+        // Phase 7/7c — memorial bonds render as ghost/dotted connections once
+        // the bonded character has died (memorialSince <= current round).
+        const isMemorial = !!b.memorial && (b.memorialSince ?? Infinity) <= round
         links.push({
           source: a.id,
           target: b.otherId,
           type: typeAtRound,
           intensity: intensityAtRound,
           trust: trustAtRound,
-          color: getBondTypeColor(typeAtRound),
-          width: 0.5 + intensityAtRound * 3,
+          // Ghost colour for memorial bonds; normal type colour otherwise.
+          color: isMemorial ? '#8a93a6' : getBondTypeColor(typeAtRound),
+          width: isMemorial ? 0.5 + (b.grief ?? intensityAtRound) * 2 : 0.5 + intensityAtRound * 3,
+          memorial: isMemorial,
+          grief: isMemorial ? (b.grief ?? 0) : 0,
+          preMemorialType: b.preMemorialType || null,
           history: b.history || [],
         })
       }
@@ -114,6 +121,9 @@ export function BondNetwork({ simulationResult }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
         <div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
           Bond Network — {graph.nodes.length} agents · {graph.links.length} bonds
+          {graph.links.some(l => l.memorial) && (
+            <span style={{ marginLeft: 8, color: '#8a93a6' }}>· ⋯ memorial (grief)</span>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
           {BOND_TYPES.map(t => (
@@ -148,7 +158,8 @@ export function BondNetwork({ simulationResult }) {
             }}
             linkColor={l => l.color}
             linkWidth={l => l.width}
-            linkOpacity={l => 0.3 + Math.abs(l.trust) * 0.65}
+            linkOpacity={l => l.memorial ? 0.35 : 0.3 + Math.abs(l.trust) * 0.65}
+            linkLineDash={l => l.memorial ? [3, 3] : null}
             onNodeClick={n => setActiveNode(prev => prev === n.id ? null : n.id)}
             onLinkClick={l => setActiveEdge(l)}
             cooldownTicks={100}

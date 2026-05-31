@@ -10,6 +10,7 @@ import { ACTIONS, ACTION_NAMES, availableActions } from './actions.js'
 import { decideViaHaiku, decideBatchViaHaiku } from './haikuClient.js'
 import { callClaude } from '../../api.js'
 import { describeProfile } from '../Psychology/enneagramMapper.js'
+import { memorialBondsOf } from './memorialBonds.js'
 import {
   MAX_TIER1_PER_ROUND,
   MAX_TIER1_PER_SIM,
@@ -112,6 +113,12 @@ export function scoreActionsDeterministic(agent, available, world, rng) {
     //   high extraversion       → social (COMMUNICATE, SEEK_BOND)
     //   high vengefulness       → CONFLICT/BETRAY when a bonded enemy is present
     score += psychologyBias(agent, name, world, rng)
+
+    // Phase 7/7c — memorial grief behaviours, scaled by the same influence
+    // dial. Named behaviours, not a global mood dampener: pursue the
+    // deceased's work, withdraw, or turn hostile toward the cause — which one
+    // depends on the survivor's psychology.
+    score += griefBias(agent, name, world)
 
     // Tiny jitter — stays tiny so a strong dominant action still wins reliably
     score += rng() * 0.05
@@ -224,6 +231,72 @@ function psychologyBias(agent, action, world, rng) {
   return delta * W
 }
 
+// Phase 7/7c — grief-driven action nudges from memorial bonds. Returns a
+// delta added to the action score, scaled by the world's psychologicalInfluence
+// dial (same throttle as psychologyBias). Behaviours are psychology-specific:
+//   secure / high-C   → PURSUE_GOAL, BUILD_KNOWLEDGE (channel grief to purpose)
+//   anxious / high-N   → OBSERVE, REST (withdrawal) ; − COOPERATE/SEEK_BOND
+//   high vengefulness  → CONFLICT, BETRAY (hostility, esp. toward the cause)
+//   secure (low-N)     → SEEK_BOND (seeks comfort) — distinct from withdrawal
+// Only fires when the agent carries an active memorial bond.
+function griefBias(agent, action, world) {
+  const bonds = agent?.bonds || {}
+  // Aggregate grief = max grief across memorial bonds (cheap inline scan).
+  let grief = 0
+  let hasMemorial = false
+  for (const b of Object.values(bonds)) {
+    if (b.memorial) { hasMemorial = true; if ((b.grief ?? 0) > grief) grief = b.grief ?? 0 }
+  }
+  if (!hasMemorial || grief <= 0.05) return 0
+
+  const inf = Number(world?.worldRules?.psychologicalInfluence)
+  const W = Number.isFinite(inf) ? Math.min(1, Math.max(0, inf)) : 0.6
+  if (W <= 0) return 0
+
+  const p  = agent.psychology || {}
+  const bf = p.bigFive || {}
+  const C  = Number.isFinite(bf.conscientiousness) ? bf.conscientiousness : 0.5
+  const N  = Number.isFinite(bf.neuroticism)       ? bf.neuroticism       : 0.5
+  const A  = Number.isFinite(bf.agreeableness)     ? bf.agreeableness     : 0.5
+  const VENG = Number((p.markers || {}).vengefulness) || 0
+  const attachment = p.attachment || 'secure'
+  const cC = C - 0.5, cN = N - 0.5
+
+  // Strength scales with grief level.
+  const g = grief
+  let delta = 0
+  switch (action) {
+    case 'PURSUE_GOAL':
+    case 'BUILD_KNOWLEDGE':
+    case 'BUILD':
+      // Channel grief into purpose — strongest for conscientious / secure.
+      delta += g * (0.35 * cC * 2 + (attachment === 'secure' ? 0.12 : 0))
+      break
+    case 'OBSERVE':
+    case 'REST':
+      // Withdrawal — strongest for anxious / fearful + high neuroticism.
+      if (attachment === 'anxious' || attachment === 'fearful') delta += g * 0.30
+      delta += g * 0.25 * cN * 2
+      break
+    case 'COOPERATE':
+    case 'SEEK_BOND':
+    case 'COMMUNICATE':
+      // Anxious / high-N grievers withdraw from social action; secure grievers
+      // reach for comfort instead.
+      if ((attachment === 'anxious' || attachment === 'fearful') && N > 0.55) delta -= g * 0.25
+      else if (attachment === 'secure') delta += g * 0.15
+      break
+    case 'CONFLICT':
+    case 'BETRAY':
+      // Grief curdles into hostility for the vengeful / disagreeable.
+      delta += g * (0.30 * VENG + 0.15 * Math.max(0, 0.5 - A) * 2)
+      break
+    default:
+      break
+  }
+  return delta * W
+}
+
 // ── Tier classification (Phase 4b: tightened to ~5% Tier 1) ────────────────
 // Tier 2 = bound char in plot-critical moment OR genuinely high-stakes ambiguity
 // Tier 1 = tiebreaker when top two deterministic scores are close AND there's
@@ -293,10 +366,19 @@ async function decideViaClaude(agent, available, world) {
     ? `Psychology: ${describeProfile(agent.psychology)}\n`
     : ''
 
+  // Phase 7/7c — memorial grief context so Sonnet reasons as a grieving
+  // character (continuing the lost one's work, withdrawing, or seeking the
+  // one who caused it). Empty when the agent carries no memorial bond.
+  const memorials = memorialBondsOf(agent, world.agentById).filter(m => (m.grief ?? 0) > 0.05)
+  const memorialLine = memorials.length
+    ? `Grief: carrying the loss of ${memorials.map(m => `${m.otherName} (${m.preMemorialType || m.type}, grief ${m.grief.toFixed(2)})`).join('; ')}.\n`
+    : ''
+
   const userContent =
     `Character: ${agent.name} (${agent.genreTag || 'bound'})\n` +
     `Traits: ${(agent.traits || []).join(', ') || '—'}\n` +
     psychLine +
+    memorialLine +
     `Region: ${agent.region}\n` +
     `Needs (0-1, lower = more desperate): ${JSON.stringify(agent.needs)}\n` +
     `Health: ${agent.health?.toFixed(2)}, stress: ${(agent.stress ?? 0).toFixed(2)}\n` +

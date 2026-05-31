@@ -73,6 +73,8 @@ function CharacterCard({ thread, expanded, onToggle, arcEntry, onGenerateArc }) 
     ? `alive · age ${thread.ageEnd.toFixed(1)}`
     : `died in round ${thread.diedRound ?? '?'} at age ${thread.ageEnd.toFixed(1)}`
   const statusColor = thread.alive ? C.green : C.accBright
+  // Phase 7/7c — strongest active grief this character carries.
+  const topGrief = (thread.memorials || []).reduce((m, x) => Math.max(m, x.grief || 0), 0)
 
   return (
     <div style={{ backgroundColor: C.bgCard, border: `1px solid ${C.border}`, borderLeft: `3px solid ${color}`, borderRadius: 6, overflow: 'hidden' }}>
@@ -86,6 +88,14 @@ function CharacterCard({ thread, expanded, onToggle, arcEntry, onGenerateArc }) 
       >
         <span style={{ fontSize: 16, color: C.parch, fontFamily: 'Georgia, serif', fontWeight: 600 }}>{thread.name}</span>
         <span style={{ fontSize: 11, color: statusColor, fontFamily: 'system-ui' }}>{statusLabel}</span>
+        {/* Phase 7/7c — grief indicator for characters carrying memorial bonds */}
+        {topGrief > 0.05 && (
+          <span title={`Grieving: ${(thread.memorials || []).filter(m => m.grief > 0.05).map(m => `${m.otherName} (${m.grief.toFixed(2)})`).join(', ')}`}
+            style={{ fontSize: 10, fontFamily: 'system-ui', color: '#8a93a6', border: `1px solid #8a93a655`, borderRadius: 8, padding: '1px 7px', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 11 }}>&#9670;</span>
+            grieving {topGrief >= 0.6 ? '(raw)' : topGrief >= 0.3 ? '' : '(fading)'}
+          </span>
+        )}
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 10, color: C.muted, fontFamily: 'system-ui' }}>
           {thread.timeline.length} moments · {thread.bondsSummary.length} bonds · {thread.dialogueCount} dialogues
@@ -120,6 +130,28 @@ function CharacterCard({ thread, expanded, onToggle, arcEntry, onGenerateArc }) 
                     borderRadius: 3,
                   }}>
                     {b.otherName} · {b.type} · int {b.intensity.toFixed(2)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Phase 7/7c — Memorial bonds (grief) */}
+          {(thread.memorials || []).length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 9, color: '#8a93a6', fontFamily: 'system-ui', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ fontSize: 11 }}>&#9670;</span> Grief — memorial bonds
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {thread.memorials.map((m, i) => (
+                  <div key={i} title={`Lost since round ${m.memorialSince ?? '?'}; was ${m.preMemorialType || m.type}`}
+                    style={{
+                      padding: '4px 8px', fontSize: 10, fontFamily: 'system-ui',
+                      backgroundColor: '#8a93a618',
+                      border: `1px dashed #8a93a677`,
+                      color: '#aab2c0', borderRadius: 3,
+                    }}>
+                    {m.otherName} · was {m.preMemorialType || m.type} · grief {m.grief.toFixed(2)}
                   </div>
                 ))}
               </div>

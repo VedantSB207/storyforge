@@ -28,6 +28,7 @@ import { decideRoundBatched } from './decisionLogic.js'
 import { resolveAction } from './actions.js'
 import { applyCoWitnessBonus, updateBondFromEvent, decayBonds } from './bondsLayer.js'
 import { selectDialogueCandidates, generateDialogues } from './dialogue.js'
+import { convertBondsOnDeath, seedMemorialBondsAtHydration, updateMemorialBonds } from './memorialBonds.js'
 import {
   MAX_LLM_DISTORTION_CALLS_PER_ROUND,
   MAX_LLM_DISTORTION_CALLS_PER_SIM,
@@ -115,6 +116,22 @@ export async function* runSimulationRounds({
   // Build agent index for O(1) lookup
   const agentById = Object.create(null)
   for (const a of agents) agentById[a.id] = a
+
+  // Phase 7/7c — hydration-time memorial bonds. A bonded Bible character whose
+  // hydrated status is 'dead' is excluded from the active cast, but survivors'
+  // seeded bonds still point at its agent id. Flag those bonds memorial from
+  // round 0 so a story that opens on a grieving survivor starts grieving.
+  if (hydration) {
+    const eff = hydration.effective || hydration.inferences || {}
+    const deadAgentIds = new Set(
+      Object.entries(eff)
+        .filter(([, inf]) => (inf?.status || '').toLowerCase() === 'dead')
+        .map(([agentId]) => agentId)
+    )
+    if (deadAgentIds.size > 0) {
+      seedMemorialBondsAtHydration({ agents, deadAgentIds })
+    }
+  }
 
   // Butterfly trace + counters
   resetKidCounter()
@@ -207,12 +224,42 @@ export async function* runSimulationRounds({
       }
     }
 
+    // Phase 7/7c — attribute a "harmed by" cause from this round's conflicts
+    // so a death that follows combat can be traced to a killer (vengeance).
+    for (const ev of actionEvents) {
+      if (ev.category === 'conflict' && ev.loserId && ev.winnerId && ev.loserId !== ev.winnerId) {
+        const loser = agentById[ev.loserId]
+        if (loser) { loser._lastHarmedBy = ev.winnerId; loser._lastHarmedRound = round }
+      }
+    }
+
     // ── 5. Mortality check ─────────────────────────────────────────────
     const deathEvents = []
+    const deathsThisRound = []
     for (const agent of agents) {
+      const wasAlive = agent.alive
       const m = mortalityCheck(agent, ctx, effectiveRng)
       Object.assign(agent, m.agent)
-      if (m.events?.length) deathEvents.push(...m.events)
+      if (m.events?.length) {
+        deathEvents.push(...m.events)
+        // Phase 7/7c — record the death + its likely cause for memorial conversion.
+        if (wasAlive && !agent.alive) {
+          // A recent attacker (within 3 rounds) is the cause; else null (health/age).
+          const causeAgentId = (agent._lastHarmedBy && (round - (agent._lastHarmedRound ?? -99)) <= 3)
+            ? agent._lastHarmedBy : null
+          deathsThisRound.push({ deceasedId: agent.id, deceasedName: agent.name, causeAgentId })
+        }
+      }
+    }
+
+    // Phase 7/7c — convert survivors' bonds toward each newly-dead agent into
+    // memorial bonds (deterministic; psychology drives later evolution).
+    for (const d of deathsThisRound) {
+      convertBondsOnDeath({
+        agents, agentById,
+        deceasedId: d.deceasedId, deceasedName: d.deceasedName,
+        round, causeAgentId: d.causeAgentId,
+      })
     }
 
     // Combine all this round's events: deterministic + actions + deaths
@@ -261,6 +308,15 @@ export async function* runSimulationRounds({
       for (const a of agents) decayBonds(a, round)
     }
 
+    // ── 9.5 Phase 7/7c — evolve memorial bonds (grief decay/intensify) ──
+    // Returns each agent's aggregate grief so emotion can spike above the
+    // chronic stress plateau. Deterministic; driven by survivor psychology.
+    const griefByAgent = Object.create(null)
+    for (const a of agents) {
+      if (!a.alive) continue
+      griefByAgent[a.id] = updateMemorialBonds({ agent: a, round, world })
+    }
+
     // ── 10. Phase 7/7b — emotion snapshots ──────────────────────────────
     // Build a small index of this round's events by agentId / targetId so
     // computeEmotionalState can scan only events touching the agent.
@@ -274,7 +330,9 @@ export async function* runSimulationRounds({
       // inside computeEmotionalState is fine; we don't pre-index because the
       // function's scan is O(events) per agent and roundEvents stays modest).
       const prev = prevEmotionByAgent[a.id] || null
-      const emo = computeEmotionalState(a, ctx, roundEvents, prev)
+      // Phase 7/7c — feed memorial grief so a fresh loss spikes into the
+      // reserved acute band above the chronic plateau.
+      const emo = computeEmotionalState(a, ctx, roundEvents, prev, griefByAgent[a.id] ?? null)
       // Mirror to the agent so downstream code (and the Phase 4 emotion field)
       // sees the same dominantEmotion label.
       a.stress     = emo.stress

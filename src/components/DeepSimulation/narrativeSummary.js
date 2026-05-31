@@ -147,6 +147,30 @@ ${butterflyStats.eventCount} origin events propagated through ${butterflyStats.k
     parts.push(boundBondLines.join('\n\n'))
   }
 
+  // Phase 7/7c — memorial bonds: who is grieving whom, and how. The chronicle
+  // should honour this grief (continuing the dead's work, withdrawal, the
+  // hardening of an enemy). Reads memorial flags off the final agent state.
+  const memorialLines = []
+  for (const a of (agents || [])) {
+    if (a?.source !== 'bound') continue
+    const mems = Object.entries(a.bonds || {})
+      .filter(([, b]) => b.memorial && (b.grief ?? 0) > 0.05)
+      .sort((x, y) => (y[1].grief ?? 0) - (x[1].grief ?? 0))
+    if (mems.length === 0) continue
+    const lines = mems.map(([otherId, b]) => {
+      const o = (agents || []).find(x => x.id === otherId)
+      const name = o?.name || otherId
+      const lvl = b.grief >= 0.6 ? 'still raw' : b.grief >= 0.3 ? 'carried quietly' : 'fading'
+      return `    - ${name} (was ${b.preMemorialType || b.type}, grief ${b.grief.toFixed(2)} — ${lvl})`
+    }).join('\n')
+    memorialLines.push(`  ${a.name} grieves:\n${lines}`)
+  }
+  if (memorialLines.length > 0) {
+    parts.push('# Grief — memorial bonds carried by named characters')
+    parts.push('Each survivor mourns differently, per who they are. Honour these losses in the chronicle.')
+    parts.push(memorialLines.join('\n\n'))
+  }
+
   // Phase 4b/3 — dialogue scenes for the chronicler to draw from
   if (dialogues && dialogues.length > 0) {
     const topDialogues = dialogues.slice(0, 5)
