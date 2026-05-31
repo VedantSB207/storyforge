@@ -188,7 +188,19 @@ export function mortalityCheck(agent, ctx, rng = Math.random) {
 //   • Dominant emotion is derived from the numbers + psychology so the same
 //     stress level can read as 'anxious' (anxious-attachment, high N) vs
 //     'angry' (low agreeableness, high callousness).
-export function computeEmotionalState(agent, ctx, roundEvents = [], prevState = null) {
+// Phase 7c Step 0 — chronic-stress soft ceiling. Ordinary, sustained
+// need/health deprivation can never push stress above this; the band above
+// is reserved for ACUTE emotional events (death of a bonded character,
+// betrayal, fresh grief). This gives grief headroom that's visible above the
+// chronic baseline, and stops the one-way ratchet to 1.0 seen in 7b.
+const CHRONIC_STRESS_CEILING = 0.65
+
+// Phase 7c — griefLevel (0..1) is the agent's current memorial-bond grief,
+// supplied by the runner once memorial bonds exist (7c). It feeds both the
+// grief output and the ACUTE stress band so a fresh loss spikes visibly above
+// the chronic plateau. For Step 0 (no memorial bonds yet) the runner passes
+// null and grief decays from prevState as before.
+export function computeEmotionalState(agent, ctx, roundEvents = [], prevState = null, griefLevel = null) {
   if (!agent) return { stress: 0, contentment: 0.5, grief: 0, dominantEmotion: 'calm' }
 
   const needs = agent.needs || {}
@@ -199,7 +211,10 @@ export function computeEmotionalState(agent, ctx, roundEvents = [], prevState = 
   const health       = Number.isFinite(agent.health) ? agent.health : 1
 
   // ── Event modifiers — scan events touching this agent this round ──────
-  let eventStress = 0, eventContent = 0, eventGrief = 0
+  // acuteStress  — sharp, event-driven (reserved band above chronic ceiling)
+  // relief       — recovery actions that pull stress DOWN this round
+  // eventContent — positive contentment pulses
+  let acuteStress = 0, eventContent = 0, relief = 0
   let sawBetrayalAgainst = false, sawConflictAgainst = false, sawCooperationFor = false
   for (const ev of roundEvents) {
     const myId = agent.id
@@ -207,34 +222,42 @@ export function computeEmotionalState(agent, ctx, roundEvents = [], prevState = 
     if (!involvesMe) continue
     switch (ev.category) {
       case 'death':
-        // Witnessing/being source of a death raises stress sharply.
-        eventStress += 0.25
+        // Witnessing/being source of a death is acute.
+        acuteStress += 0.25
         break
       case 'betrayal':
-        if (ev.targetId === myId) { eventStress += 0.30; sawBetrayalAgainst = true }
-        else                       { eventStress += 0.05 }
+        if (ev.targetId === myId) { acuteStress += 0.30; sawBetrayalAgainst = true }
+        else                       { acuteStress += 0.05 }
         break
       case 'conflict':
-        if (ev.targetId === myId) { eventStress += 0.18; sawConflictAgainst = true }
-        else                       { eventStress += 0.08 }
+        if (ev.targetId === myId) { acuteStress += 0.18; sawConflictAgainst = true }
+        else                       { acuteStress += 0.08 }
         break
       case 'cooperation':
         eventContent += 0.18
+        relief       += 0.10          // connecting with others calms
         sawCooperationFor = true
         break
       case 'need_critical':
-        eventStress += 0.10
+        acuteStress += 0.06
+        break
+      // ── Recovery actions — pull stress down, give the curve dynamic range ──
+      case 'rest':
+        relief += 0.14
+        break
+      case 'eat':
+        relief += 0.10
+        eventContent += 0.04
         break
       case 'travel':
-        eventContent += 0.02   // mild — change of scene
+        eventContent += 0.02; relief += 0.04   // change of scene
         break
       default: break
     }
   }
-  // Clamp event-driven deltas before psychology amplification so neuroticism
-  // can't push stress past 1.5 from a single round.
-  eventStress  = Math.min(0.7, eventStress)
+  acuteStress  = Math.min(0.6, acuteStress)
   eventContent = Math.min(0.5, eventContent)
+  relief       = Math.min(0.35, relief)
 
   // ── Psychology amplification ──────────────────────────────────────────
   const p = agent.psychology || {}
@@ -246,22 +269,47 @@ export function computeEmotionalState(agent, ctx, roundEvents = [], prevState = 
   const VENG = Number.isFinite(mk.vengefulness) ? mk.vengefulness   : 0
   const CALL = Number.isFinite(mk.callousness)  ? mk.callousness    : 0
 
-  // Neuroticism amplifies event-driven swings by up to +50%.
-  const swingMult = 1 + 0.5 * (N - 0.5) * 2   // N=0.5 → 1.0; N=1 → 1.5; N=0 → 0.5
-  eventStress  *= swingMult
+  // Neuroticism amplifies acute swings (+50% at N=1) and dampens recovery
+  // (high-N characters calm down more slowly).
+  const swingMult  = 1 + 0.5 * (N - 0.5) * 2   // N=0.5→1.0; N=1→1.5; N=0→0.5
+  const reliefMult = 1 - 0.4 * (N - 0.5) * 2   // N=0.5→1.0; N=1→0.6; N=0→1.4
+  acuteStress  *= swingMult
   eventContent *= swingMult
+  relief       *= reliefMult
 
-  // ── Stress: baseline + event pulse + health damage ────────────────────
-  const survivalStress = Math.max(0, 0.5 - survival)            // low needs → stress
-  const healthStress   = Math.max(0, 1 - health) * 0.5
-  let stress = survivalStress + healthStress + eventStress
-  // Neurotic baseline: high-N characters carry more ambient anxiety even when calm
-  stress += 0.08 * (N - 0.5) * 2 * Math.max(0, 1 - eventStress / 0.5)
-  // Carry-over from previous round (decay toward current value)
-  if (prevState && Number.isFinite(prevState.stress)) {
-    stress = 0.65 * stress + 0.35 * prevState.stress
+  // ── Grief ────────────────────────────────────────────────────────────
+  // 7c supplies an explicit griefLevel from memorial bonds. Step 0: decay
+  // any carried-over grief from prevState.
+  let grief
+  if (griefLevel != null && Number.isFinite(griefLevel)) {
+    grief = Math.min(1, Math.max(0, griefLevel))
+  } else if (prevState && Number.isFinite(prevState.grief)) {
+    grief = Math.max(0, prevState.grief * 0.92)
+  } else {
+    grief = 0
   }
-  stress = Math.min(1, Math.max(0, stress))
+  // Fresh/strong grief is itself an acute stressor, scaled by neuroticism.
+  const griefStress = grief * 0.5 * swingMult
+
+  // ── Stress: chronic plateau + acute band, minus recovery ──────────────
+  // Chronic deprivation maps into [0, CHRONIC_STRESS_CEILING] and can never
+  // exceed it. survival deprivation weighted 0.7, health deprivation 0.3.
+  const survivalDeprivation = Math.max(0, Math.min(1, (0.6 - survival) / 0.6))  // survival≥0.6 → 0
+  const healthDeprivation   = Math.max(0, Math.min(1, 1 - health))
+  const chronic = CHRONIC_STRESS_CEILING * (0.7 * survivalDeprivation + 0.3 * healthDeprivation)
+  // Ambient neurotic anxiety nudges the chronic floor up slightly.
+  const neuroticBaseline = 0.06 * (N - 0.5) * 2
+
+  // Acute events + grief reserve the band above the chronic ceiling.
+  const acute = acuteStress + griefStress
+
+  let stressTarget = chronic + neuroticBaseline + acute - relief
+  // Momentum: blend with the previous round so recovery is gradual, not
+  // instantaneous, and chronic stress eases down when recovery actions fire.
+  if (prevState && Number.isFinite(prevState.stress)) {
+    stressTarget = 0.6 * stressTarget + 0.4 * prevState.stress
+  }
+  const stress = Math.min(1, Math.max(0, stressTarget))
 
   // ── Contentment: baseline + event pulse - stress drag ────────────────
   let contentment = 0.4 * survival + 0.5 * socialPurpose + 0.1 * health
@@ -270,16 +318,11 @@ export function computeEmotionalState(agent, ctx, roundEvents = [], prevState = 
   contentment += 0.1 * (A - 0.5) * 2
   contentment -= 0.12 * CALL
   contentment -= 0.3 * stress     // stress drags contentment down
+  contentment -= 0.25 * grief     // grief drags contentment down
   if (prevState && Number.isFinite(prevState.contentment)) {
     contentment = 0.7 * contentment + 0.3 * prevState.contentment
   }
   contentment = Math.min(1, Math.max(0, contentment))
-
-  // ── Grief: reserved for 7c. Decay any carried-over value. ────────────
-  let grief = 0
-  if (prevState && Number.isFinite(prevState.grief)) {
-    grief = Math.max(0, prevState.grief * 0.92)
-  }
 
   // ── Dominant emotion derivation ──────────────────────────────────────
   //   Priority order (first match wins):
